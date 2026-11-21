@@ -1,5 +1,7 @@
 export type ForgeKind = 'github' | 'gitlab' | 'forgejo';
 
+export type SyncMode = 'two-way' | 'contribute-only';
+
 export interface BookmarkEntry {
   title: string;
   url: string;
@@ -7,6 +9,8 @@ export interface BookmarkEntry {
   added?: string;
   note?: string;
   tags: string[];
+  savedBy?: string[];
+  archivedAt?: string;
   order: number;
 }
 
@@ -91,6 +95,8 @@ export interface ProfileConfig {
   rootDir: string;
   token: string;
   authMethod?: 'pat' | 'device-flow';
+  username?: string;
+  syncMode?: SyncMode;
   rootFolderId: string;
   rootFolderTitle?: string;
   siteUrl?: string;
@@ -111,6 +117,7 @@ export interface SyncDiffSummary {
   removedBookmarks: Array<{ folderPath: string; title: string; url: string }>;
   updatedBookmarks: Array<{ folderPath: string; title: string; url: string }>;
   movedBookmarks: Array<{ fromPath: string; toPath: string; title: string; url: string }>;
+  archivedBookmarks: Array<{ folderPath: string; title: string; url: string }>;
   addedFolders: string[];
   removedFolders: string[];
   remoteAddedBookmarks: Array<{ folderPath: string; title: string; url: string }>;
@@ -126,6 +133,8 @@ export interface SyncResult {
   localPatchNeeded: boolean;
   remoteCommitNeeded: boolean;
   mergedTree: BookmarkTree;
+  browserTargetTree: BookmarkTree;
+  archivedCount: number;
   snapshot: SyncSnapshot;
   summary: SyncDiffSummary;
   conflicts: ConflictRecord[];

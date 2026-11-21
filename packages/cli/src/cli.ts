@@ -18,7 +18,7 @@ const program = new Command();
 program
   .name('glyphrig')
   .description('Scaffold, build, preview, and validate a static Glyphrig bookmark directory site.')
-  .version('0.2.0');
+  .version('0.3.0');
 
 async function promptInitOptions(
   dirArg: string,

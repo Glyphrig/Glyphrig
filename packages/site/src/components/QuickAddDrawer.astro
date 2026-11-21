@@ -70,6 +70,7 @@ const clientConfig = JSON.stringify({
         createForgeAdapter,
         folderPathToFilePath,
         inspectUrlSafety,
+        mergeBookmarkEntries,
         normalizeUrl,
         parseFolderMarkdown,
         serializeFolderMarkdown,
@@ -186,7 +187,10 @@ const clientConfig = JSON.stringify({
             token,
           });
 
-          const remote = await adapter.readBookmarkFiles(cfg.branch, cfg.rootDir);
+          const [remote, user] = await Promise.all([
+            adapter.readBookmarkFiles(cfg.branch, cfg.rootDir),
+            adapter.getAuthenticatedUser().catch(() => null),
+          ]);
           const filePath = folderPathToFilePath(cfg.rootDir, folderPath);
           const existingContent = remote.files.get(filePath) ?? '';
           const parsedDoc = existingContent
@@ -200,18 +204,30 @@ const clientConfig = JSON.stringify({
             (folderSelect?.selectedOptions[0]?.textContent?.replace(/\s*\([^)]*\)$/, '') ||
               'Bookmarks');
 
-          const nextBookmarks = [
-            ...existingBookmarks,
-            {
-              title,
-              url: safety.cleanedUrl,
-              normalizedUrl: normalizeUrl(safety.cleanedUrl),
-              added: today,
-              ...(note ? { note } : {}),
-              tags,
-              order: existingBookmarks.length,
-            },
-          ];
+          const normUrl = normalizeUrl(safety.cleanedUrl);
+          const incomingEntry = {
+            title,
+            url: safety.cleanedUrl,
+            normalizedUrl: normUrl,
+            added: today,
+            ...(note ? { note } : {}),
+            tags,
+            ...(user?.username ? { savedBy: [user.username] } : {}),
+            order: existingBookmarks.length,
+          };
+
+          const matchIdx = existingBookmarks.findIndex(
+            (b) => b.normalizedUrl === normUrl,
+          );
+          const nextBookmarks = [...existingBookmarks];
+          if (matchIdx !== -1) {
+            nextBookmarks[matchIdx] = mergeBookmarkEntries(
+              existingBookmarks[matchIdx]!,
+              incomingEntry,
+            );
+          } else {
+            nextBookmarks.push(incomingEntry);
+          }
 
           const folderNode: FolderNode = {
             path: folderPath,

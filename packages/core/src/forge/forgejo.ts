@@ -1,4 +1,5 @@
-import { filePathToFolderPath, normalizeRepoRootDir } from '../markdown/slug.js';
+import { normalizeUsername } from '../markdown/parse.js';
+import { isBookmarkOrArchiveFilePath, normalizeRepoRootDir } from '../markdown/slug.js';
 import {
   decodeBase64ToUtf8,
   encodeRefPath,
@@ -7,6 +8,7 @@ import {
 } from './encoding.js';
 import {
   ForgeError,
+  type AuthenticatedUser,
   type CommitChangesInput,
   type ForgeAdapter,
   type ForgeAdapterConfig,
@@ -87,6 +89,25 @@ export class ForgejoAdapter implements ForgeAdapter {
     return res;
   }
 
+  async getAuthenticatedUser(): Promise<AuthenticatedUser> {
+    const res = await this.request('/user');
+    const data = (await res.json()) as {
+      login?: string;
+      username?: string;
+      full_name?: string;
+      avatar_url?: string;
+    };
+    const username = normalizeUsername(data.login ?? data.username ?? '');
+    if (!username) {
+      throw new ForgeError('Unable to determine authenticated Forgejo username', 500, 'unknown');
+    }
+    return {
+      username,
+      ...(data.full_name ? { displayName: data.full_name } : {}),
+      ...(data.avatar_url ? { avatarUrl: data.avatar_url } : {}),
+    };
+  }
+
   async testConnection(branch?: string): Promise<RepoConnectionInfo> {
     const res = await this.request(
       `/repos/${encodeURIComponent(this.owner)}/${encodeURIComponent(this.repo)}`,
@@ -150,7 +171,7 @@ export class ForgejoAdapter implements ForgeAdapter {
 
     const matchingBlobs = (treeData.tree ?? []).filter(
       (item) =>
-        item.type === 'blob' && filePathToFolderPath(cleanRoot, item.path) !== null,
+        item.type === 'blob' && isBookmarkOrArchiveFilePath(cleanRoot, item.path),
     );
 
     const files = new Map<string, string>();

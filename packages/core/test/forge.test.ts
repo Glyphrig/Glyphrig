@@ -244,4 +244,33 @@ describe('Forge adapters', () => {
       ],
     });
   });
+
+  it('fetches authenticated user login across GitHub, GitLab, and Forgejo adapters', async () => {
+    const ghAdapter = createForgeAdapter({
+      forge: 'github',
+      owner: 'o',
+      repo: 'r',
+      token: 't',
+      fetchFn: async () => jsonResponse({ login: 'AliceDev', name: 'Alice' }),
+    });
+    expect((await ghAdapter.getAuthenticatedUser()).username).toBe('alicedev');
+
+    const glAdapter = createForgeAdapter({
+      forge: 'gitlab',
+      owner: 'o',
+      repo: 'r',
+      token: 't',
+      fetchFn: async () => jsonResponse({ username: 'Bob_GL' }),
+    });
+    expect((await glAdapter.getAuthenticatedUser()).username).toBe('bob_gl');
+
+    const fjAdapter = createForgeAdapter({
+      forge: 'forgejo',
+      owner: 'o',
+      repo: 'r',
+      token: 't',
+      fetchFn: async () => jsonResponse({ login: 'Carol-CB' }),
+    });
+    expect((await fjAdapter.getAuthenticatedUser()).username).toBe('carol-cb');
+  });
 });

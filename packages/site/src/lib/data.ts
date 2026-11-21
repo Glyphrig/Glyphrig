@@ -30,6 +30,10 @@ export function tagHref(tagSlug: string): string {
   return withBase(`tags/${tagSlug}/`);
 }
 
+export function contributorHref(userSlug: string): string {
+  return withBase(`u/${userSlug}/`);
+}
+
 export function findFolderByPath(folderPath: string): EnrichedFolderNode | undefined {
   if (!folderPath) return siteData.root;
   return siteData.flatFolders.find((f) => f.path === folderPath);
@@ -85,6 +89,28 @@ export function escapeXml(str: string): string {
 
 export function sortRecentBookmarks(bookmarks: EnrichedBookmark[]): EnrichedBookmark[] {
   return [...bookmarks].sort((a, b) => {
+    const da = a.added ?? '0000-00-00';
+    const db = b.added ?? '0000-00-00';
+    if (da !== db) return db.localeCompare(da);
+    return a.title.localeCompare(b.title);
+  });
+}
+
+export function deduplicateBookmarksByUrl(bookmarks: EnrichedBookmark[]): EnrichedBookmark[] {
+  const byUrl = new Map<string, EnrichedBookmark>();
+  for (const bm of bookmarks) {
+    if (!byUrl.has(bm.normalizedUrl)) {
+      byUrl.set(bm.normalizedUrl, bm);
+    }
+  }
+  return [...byUrl.values()];
+}
+
+export function sortPopularBookmarks(bookmarks: EnrichedBookmark[]): EnrichedBookmark[] {
+  return deduplicateBookmarksByUrl(bookmarks).sort((a, b) => {
+    if (a.popularity !== b.popularity) {
+      return b.popularity - a.popularity;
+    }
     const da = a.added ?? '0000-00-00';
     const db = b.added ?? '0000-00-00';
     if (da !== db) return db.localeCompare(da);

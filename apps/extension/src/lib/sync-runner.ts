@@ -14,6 +14,7 @@ import {
   clearDirtyProfile,
   getProfiles,
   getSnapshots,
+  saveProfiles,
   saveSnapshot,
 } from './storage.js';
 
@@ -151,6 +152,9 @@ function buildSyncSummaryMessage(result: SyncResult): string {
   if (pushed > 0 || result.committed) {
     parts.push(`pushed ${result.upserts.length + result.deletes.length} file change(s)`);
   }
+  if (result.archivedCount > 0) {
+    parts.push(`archived ${result.archivedCount} item(s)`);
+  }
   if (pulled > 0 || result.localPatchNeeded) {
     parts.push(`updated browser folder (${pulled} link change(s))`);
   }
@@ -174,6 +178,26 @@ async function executeSync(
     token: profile.token,
   });
 
+  let currentUser = profile.username?.trim() || undefined;
+  if (!currentUser) {
+    try {
+      const authUser = await adapter.getAuthenticatedUser();
+      const fetched = authUser?.username?.trim();
+      if (fetched) {
+        currentUser = fetched;
+        const profiles = await getProfiles();
+        const idx = profiles.findIndex((p) => p.id === profile.id);
+        if (idx >= 0) {
+          const updated = [...profiles];
+          updated[idx] = { ...updated[idx]!, username: fetched };
+          await saveProfiles(updated);
+        }
+      }
+    } catch {
+      // Best-effort lookup; proceed with sync even if user endpoint is unavailable
+    }
+  }
+
   const snapshots = await getSnapshots();
   const snapshot = snapshots[profile.id] ?? null;
   const localTree = await readBrowserSubtree(profile.rootFolderId);
@@ -185,6 +209,8 @@ async function executeSync(
     rootDir: profile.rootDir || 'bookmarks',
     localTree,
     snapshot,
+    syncMode: profile.syncMode ?? 'two-way',
+    currentUser,
     safety: profile.safety,
     dryRun,
   });
@@ -194,7 +220,7 @@ async function executeSync(
   }
 
   if (result.localPatchNeeded) {
-    await applyTreeToBrowser(profile.rootFolderId, result.mergedTree, {
+    await applyTreeToBrowser(profile.rootFolderId, result.browserTargetTree, {
       onStart: () => beginEchoSuppression(profile.id),
       onEnd: () => endEchoSuppression(profile.id),
     });

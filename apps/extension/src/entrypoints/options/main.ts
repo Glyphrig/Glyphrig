@@ -5,6 +5,7 @@ import {
   type GitHubDeviceCodeResponse,
   type GitHubDeviceTokenPollResult,
   type ProfileConfig,
+  type SyncMode,
   type SyncResult,
 } from '@glyphrig/core';
 import { browser } from 'wxt/browser';
@@ -79,6 +80,7 @@ const feedbackEl = document.getElementById('form-feedback')!;
 const folderPickerEl = document.getElementById('folder-picker')!;
 const selectedFolderDisplay = document.getElementById('selected-folder-display')!;
 const connStatusEl = document.getElementById('conn-status')!;
+const verifiedUsernameEl = document.getElementById('verified-username')!;
 
 const nameInput = document.getElementById('f-name') as HTMLInputElement;
 const forgeSelect = document.getElementById('f-forge') as HTMLSelectElement;
@@ -98,6 +100,7 @@ const deviceVerifyLink = document.getElementById('device-verify-link') as HTMLAn
 const devicePollStatus = document.getElementById('device-poll-status')!;
 
 const enabledCheck = document.getElementById('f-enabled') as HTMLInputElement;
+const syncModeSelect = document.getElementById('f-syncmode') as HTMLSelectElement;
 const autoSyncCheck = document.getElementById('f-autosync') as HTMLInputElement;
 const debounceInput = document.getElementById('f-debounce') as HTMLInputElement;
 const pullMinInput = document.getElementById('f-pull-min') as HTMLInputElement;
@@ -123,8 +126,15 @@ let editingProfileId: string | null = null;
 let selectedFolderId = '';
 let selectedFolderTitle = '';
 let authMethod: 'pat' | 'device-flow' = 'pat';
+let verifiedUsername = '';
 let pendingPreviewProfileId: string | null = null;
 let activePollTimer: number | undefined;
+
+function renderVerifiedUsername(): void {
+  verifiedUsernameEl.textContent = verifiedUsername
+    ? `Attribution: @${verifiedUsername}`
+    : '';
+}
 
 function stopDevicePoll(): void {
   if (activePollTimer !== undefined) {
@@ -206,9 +216,11 @@ function loadProfileIntoForm(profile: ProfileConfig | null): void {
     siteUrlInput.value = '';
     tokenInput.value = '';
     authMethod = 'pat';
+    verifiedUsername = '';
     selectedFolderId = '';
     selectedFolderTitle = '';
     enabledCheck.checked = true;
+    syncModeSelect.value = 'two-way';
     autoSyncCheck.checked = true;
     debounceInput.value = '60';
     pullMinInput.value = '15';
@@ -230,9 +242,11 @@ function loadProfileIntoForm(profile: ProfileConfig | null): void {
     siteUrlInput.value = profile.siteUrl ?? '';
     tokenInput.value = profile.token;
     authMethod = profile.authMethod ?? 'pat';
+    verifiedUsername = profile.username ?? '';
     selectedFolderId = profile.rootFolderId;
     selectedFolderTitle = profile.rootFolderTitle ?? '';
     enabledCheck.checked = profile.enabled;
+    syncModeSelect.value = profile.syncMode ?? 'two-way';
     autoSyncCheck.checked = profile.autoSync;
     debounceInput.value = String(profile.pushDebounceSeconds || 60);
     pullMinInput.value = String(profile.pullIntervalMinutes || 15);
@@ -241,6 +255,7 @@ function loadProfileIntoForm(profile: ProfileConfig | null): void {
     safetyTrackingCheck.checked = profile.safety.stripTrackingParams;
     safetyPreviewCheck.checked = profile.safety.previewFirstSync;
   }
+  renderVerifiedUsername();
   updateForgeUi();
   renderFolderPicker();
 }
@@ -253,6 +268,7 @@ function buildProfileFromForm(): ProfileConfig {
     id: editingProfileId ?? generateId(),
     name: nameInput.value.trim() || 'Bookmarks',
     enabled: enabledCheck.checked,
+    syncMode: (syncModeSelect.value as SyncMode) || 'two-way',
     forge: forgeSelect.value as ForgeKind,
     ...(instanceInput.value.trim() ? { instanceUrl: instanceInput.value.trim() } : {}),
     owner: ownerInput.value.trim(),
@@ -261,6 +277,7 @@ function buildProfileFromForm(): ProfileConfig {
     rootDir: rootDirInput.value.trim() || 'bookmarks',
     token: tokenInput.value.trim(),
     authMethod,
+    ...(verifiedUsername ? { username: verifiedUsername } : {}),
     rootFolderId: selectedFolderId,
     ...(selectedFolderTitle ? { rootFolderTitle: selectedFolderTitle } : {}),
     ...(siteUrlInput.value.trim() ? { siteUrl: siteUrlInput.value.trim() } : {}),
@@ -404,14 +421,28 @@ function renderPreviewModal(preview: DryRunPreviewPayload): void {
     previewBodyEl.append(h, ul);
   };
 
+  const archivedKeys = new Set(
+    preview.summary.archivedBookmarks.map((b) => `${b.folderPath}\0${b.url}`),
+  );
+  const nonArchivedRemoved = preview.summary.removedBookmarks.filter(
+    (b) => !archivedKeys.has(`${b.folderPath}\0${b.url}`),
+  );
+
   addSection(
     'Push to Git',
     [
       ...preview.summary.addedBookmarks.map((b) => `+ [${b.folderPath || 'root'}] ${b.title} (${b.url})`),
       ...preview.summary.updatedBookmarks.map((b) => `~ [${b.folderPath || 'root'}] ${b.title}`),
       ...preview.summary.movedBookmarks.map((b) => `-> ${b.title}: ${b.fromPath || 'root'} -> ${b.toPath || 'root'}`),
-      ...preview.summary.removedBookmarks.map((b) => `- [${b.folderPath || 'root'}] ${b.title}`),
+      ...nonArchivedRemoved.map((b) => `- [${b.folderPath || 'root'}] ${b.title}`),
     ],
+  );
+
+  addSection(
+    'Archive to .archived/',
+    preview.summary.archivedBookmarks.map(
+      (b) => `archive [${b.folderPath || 'root'}] ${b.title} (${b.url})`,
+    ),
   );
 
   addSection(
@@ -455,7 +486,18 @@ document.querySelectorAll<HTMLButtonElement>('.tab-btn').forEach((btn) => {
   });
 });
 
-forgeSelect.addEventListener('change', updateForgeUi);
+const clearVerifiedUsername = (): void => {
+  if (!verifiedUsername) return;
+  verifiedUsername = '';
+  renderVerifiedUsername();
+};
+
+forgeSelect.addEventListener('change', () => {
+  updateForgeUi();
+  clearVerifiedUsername();
+});
+instanceInput.addEventListener('input', clearVerifiedUsername);
+tokenInput.addEventListener('input', clearVerifiedUsername);
 
 document.getElementById('btn-new-profile')?.addEventListener('click', () => {
   loadProfileIntoForm(null);
@@ -475,6 +517,7 @@ document.getElementById('btn-test-conn')?.addEventListener('click', async () => 
       fullName: string;
       branchExists: boolean;
       defaultBranch: string;
+      username?: string;
     }>({
       type: 'TEST_CONNECTION',
       config: {
@@ -486,9 +529,12 @@ document.getElementById('btn-test-conn')?.addEventListener('click', async () => 
         token: tokenInput.value.trim(),
       },
     });
+    verifiedUsername = info.username ?? '';
+    renderVerifiedUsername();
+    const userNote = info.username ? ` (as @${info.username})` : '';
     connStatusEl.textContent = info.branchExists
-      ? `Connected to ${info.fullName} (branch found).`
-      : `Connected to ${info.fullName} (branch will be initialized on first sync).`;
+      ? `Connected to ${info.fullName}${userNote} (branch found).`
+      : `Connected to ${info.fullName}${userNote} (branch will be initialized on first sync).`;
   } catch (err) {
     connStatusEl.textContent = err instanceof Error ? err.message : 'Connection failed.';
   }
@@ -521,6 +567,7 @@ deviceLoginBtn.addEventListener('click', async () => {
         if (res.status === 'authorized') {
           tokenInput.value = res.accessToken;
           authMethod = 'device-flow';
+          clearVerifiedUsername();
           devicePollStatus.textContent = 'Authorized! Token populated below (remember to Save Profile).';
           return;
         }

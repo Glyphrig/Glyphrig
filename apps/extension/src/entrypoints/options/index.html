@@ -140,6 +140,7 @@
                   Test Connection
                 </button>
                 <span id="conn-status" class="small"></span>
+                <span id="verified-username" class="small muted"></span>
               </div>
             </fieldset>
 
@@ -156,6 +157,13 @@
 
             <fieldset class="fieldset">
               <legend>Sync Cadence &amp; Public Safety Rails</legend>
+              <div class="field">
+                <label for="f-syncmode">Sync Mode</label>
+                <select id="f-syncmode">
+                  <option value="two-way">Two-way sync (mirror shared repo &lt;-&gt; browser folder)</option>
+                  <option value="contribute-only">Contribute-only (push my bookmarks &amp; attribution; never pull others into my browser)</option>
+                </select>
+              </div>
               <label class="checkbox-row">
                 <input id="f-enabled" type="checkbox" checked />
                 <span>Enable this sync profile</span>

@@ -199,12 +199,14 @@ export function summarizeBrowserChanges(
 export function summarizeRepoChanges(
   remote: BookmarkTree,
   merged: BookmarkTree,
+  archivedBookmarks: SyncDiffSummary['archivedBookmarks'] = [],
 ): Pick<
   SyncDiffSummary,
   | 'addedBookmarks'
   | 'removedBookmarks'
   | 'updatedBookmarks'
   | 'movedBookmarks'
+  | 'archivedBookmarks'
   | 'addedFolders'
   | 'removedFolders'
 > {
@@ -267,6 +269,7 @@ export function summarizeRepoChanges(
     removedBookmarks,
     updatedBookmarks,
     movedBookmarks,
+    archivedBookmarks,
     addedFolders: addedFolders.sort(),
     removedFolders: removedFolders.sort(),
   };

@@ -169,3 +169,13 @@ Configure a sync profile in each browser:
   npx --yes @glyphrig/cli@0 validate
   npx --yes @glyphrig/cli@0 dev
   ```
+
+---
+
+## Step 7: Shared & Team Repositories (Optional)
+
+Multiple people can point Glyphrig (extension or PWA Quick Add) at the same shared repository:
+
+- **Plain forge attribution & duplicate merging:** Glyphrig records your Git forge handle (`by=alice,bob`) in each bookmark's hidden HTML comment. When multiple collaborators save the same URL, Glyphrig merges their handles, unions `#tags`, preserves notes, keeps the earliest `added` date, and surfaces shared popularity rankings at `/popular/` and per-user views at `/u/<username>/`.
+- **Two-way vs. Contribute-only mode:** In **Extension Settings -> Sync Mode**, choose **Two-way sync** to mirror all team bookmarks into your browser folder, or **Contribute-only** to push your own additions and removals to the repo without pulling collaborators' bookmarks into your personal browser.
+- **Non-destructive `.archived/` folder:** Deleting a link removes only your handle from `by=...`. When no contributors remain saving that bookmark, Glyphrig moves it into `<folder>/.archived/README.md` (`archived=YYYY-MM-DD`) in the same directory—preserving history in Git while excluding archived items from the published site. Re-saving the link restores it cleanly.

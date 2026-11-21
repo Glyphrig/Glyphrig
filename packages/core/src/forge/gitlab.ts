@@ -1,7 +1,9 @@
-import { filePathToFolderPath, normalizeRepoRootDir } from '../markdown/slug.js';
+import { normalizeUsername } from '../markdown/parse.js';
+import { isBookmarkOrArchiveFilePath, normalizeRepoRootDir } from '../markdown/slug.js';
 import { mapWithConcurrency } from './encoding.js';
 import {
   ForgeError,
+  type AuthenticatedUser,
   type CommitChangesInput,
   type ForgeAdapter,
   type ForgeAdapterConfig,
@@ -80,6 +82,24 @@ export class GitLabAdapter implements ForgeAdapter {
     return res;
   }
 
+  async getAuthenticatedUser(): Promise<AuthenticatedUser> {
+    const res = await this.request('/user');
+    const data = (await res.json()) as {
+      username?: string;
+      name?: string;
+      avatar_url?: string;
+    };
+    const username = normalizeUsername(data.username ?? '');
+    if (!username) {
+      throw new ForgeError('Unable to determine authenticated GitLab username', 500, 'unknown');
+    }
+    return {
+      username,
+      ...(data.name ? { displayName: data.name } : {}),
+      ...(data.avatar_url ? { avatarUrl: data.avatar_url } : {}),
+    };
+  }
+
   async testConnection(branch?: string): Promise<RepoConnectionInfo> {
     const res = await this.request(`/projects/${this.projectId}`);
     const project = (await res.json()) as {
@@ -155,7 +175,7 @@ export class GitLabAdapter implements ForgeAdapter {
 
     const matchingBlobs = entries.filter(
       (item) =>
-        item.type === 'blob' && filePathToFolderPath(cleanRoot, item.path) !== null,
+        item.type === 'blob' && isBookmarkOrArchiveFilePath(cleanRoot, item.path),
     );
 
     const files = new Map<string, string>();

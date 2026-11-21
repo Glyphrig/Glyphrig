@@ -1,7 +1,74 @@
 import YAML from 'yaml';
 import { normalizeUrl } from '../safety/sanitize.js';
 import type { BookmarkEntry, BookmarkTree, FolderNode } from '../types.js';
-import { filePathToFolderPath, normalizeRepoRootDir } from './slug.js';
+import {
+  archiveFilePathToFolderPath,
+  filePathToFolderPath,
+  normalizeRepoRootDir,
+} from './slug.js';
+
+export function normalizeUsername(raw: string): string {
+  return raw
+    .trim()
+    .replace(/^@+/, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9._-]+/g, '');
+}
+
+export function normalizeUserList(users?: string[]): string[] {
+  if (!users || users.length === 0) return [];
+  const set = new Set<string>();
+  for (const u of users) {
+    const clean = normalizeUsername(u);
+    if (clean) set.add(clean);
+  }
+  return [...set].sort();
+}
+
+export function mergeNotes(existing?: string, incoming?: string): string | undefined {
+  const a = existing?.trim().replace(/\s+/g, ' ');
+  const b = incoming?.trim().replace(/\s+/g, ' ');
+  if (!a) return b || undefined;
+  if (!b) return a || undefined;
+  if (a.toLowerCase() === b.toLowerCase()) return a;
+  const partsA = a.split(/\s+\/\s+/).map((p) => p.toLowerCase());
+  const partsB = b.split(/\s+\/\s+/);
+  const additions = partsB.filter((seg) => !partsA.includes(seg.toLowerCase()));
+  if (additions.length === 0) return a;
+  return `${a} / ${additions.join(' / ')}`;
+}
+
+export function mergeBookmarkEntries(
+  primary: BookmarkEntry,
+  incoming: BookmarkEntry,
+): BookmarkEntry {
+  const savedBy = normalizeUserList([
+    ...(primary.savedBy ?? []),
+    ...(incoming.savedBy ?? []),
+  ]);
+  const tagSet = new Set<string>();
+  const tags: string[] = [];
+  for (const t of [...primary.tags, ...incoming.tags]) {
+    const clean = t.trim().replace(/^#+/, '').toLowerCase();
+    if (clean && !tagSet.has(clean)) {
+      tagSet.add(clean);
+      tags.push(clean);
+    }
+  }
+  const addedCandidates = [primary.added, incoming.added].filter(
+    (d): d is string => Boolean(d && d.trim()),
+  );
+  addedCandidates.sort();
+  const note = mergeNotes(primary.note, incoming.note);
+
+  return {
+    ...primary,
+    ...(addedCandidates[0] ? { added: addedCandidates[0] } : {}),
+    ...(note !== undefined ? { note } : {}),
+    tags,
+    ...(savedBy.length > 0 ? { savedBy } : {}),
+  };
+}
 
 export type MarkdownBlock =
   | { type: 'prose'; raw: string }
@@ -131,12 +198,20 @@ export function parseBookmarkLine(line: string, order = 0): BookmarkEntry | null
 
   let tail = line.slice(idx).trim();
   let added: string | undefined;
+  let savedBy: string[] = [];
+  let archivedAt: string | undefined;
 
   const commentMatch = tail.match(/(<!--\s*glyphrig:\s*.*?-->)\s*$/i);
   if (commentMatch && commentMatch[1]) {
     const meta = parseGlyphrigComment(commentMatch[1]);
     if (meta.added) {
       added = meta.added;
+    }
+    if (meta.by) {
+      savedBy = normalizeUserList(meta.by.split(','));
+    }
+    if (meta.archived) {
+      archivedAt = meta.archived;
     }
     tail = tail.slice(0, commentMatch.index).trim();
   }
@@ -174,6 +249,8 @@ export function parseBookmarkLine(line: string, order = 0): BookmarkEntry | null
     ...(added ? { added } : {}),
     ...(note ? { note } : {}),
     tags,
+    ...(savedBy.length > 0 ? { savedBy } : {}),
+    ...(archivedAt ? { archivedAt } : {}),
     order,
   };
 }
@@ -407,4 +484,22 @@ export function parseBookmarkRepoFiles(
     tree: { root: rootNode },
     rawDocs,
   };
+}
+
+export function parseArchiveRepoFiles(
+  files: Map<string, string>,
+  rootDir = 'bookmarks',
+): Map<string, ParsedFolderDocument> {
+  const cleanRoot = normalizeRepoRootDir(rootDir);
+  const docs = new Map<string, ParsedFolderDocument>();
+  const sortedPaths = [...files.keys()].sort();
+  for (const filePath of sortedPaths) {
+    const folderPath = archiveFilePathToFolderPath(cleanRoot, filePath);
+    if (folderPath === null) {
+      continue;
+    }
+    const content = files.get(filePath) ?? '';
+    docs.set(folderPath, parseFolderMarkdown(content, folderPath));
+  }
+  return docs;
 }

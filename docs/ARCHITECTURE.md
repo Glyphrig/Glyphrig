@@ -43,16 +43,23 @@ Glyphrig is a two-way multi-browser bookmark synchronization extension paired wi
 - YAML frontmatter preserves exact `title`, sibling `order`, and any extra user-authored metadata (`description`, etc.).
 - Bookmark line syntax:
   ```markdown
-  - [Astro](https://astro.build) — Fast static site framework `#web` `#ssg` <!-- glyphrig: added=2026-11-21 -->
+  - [Astro](https://astro.build) — Fast static site framework `#web` `#ssg` <!-- glyphrig: added=2026-11-21 by=alice,bob -->
   ```
 - Surrounding hand-written prose blocks, comments, and bookmark notes/tags are preserved round-trip across two-way browser syncs.
+- Deletions are non-destructive: when a bookmark has no remaining contributors saving it, it moves to `<folder>/.archived/README.md` with `archived=YYYY-MM-DD` metadata rather than being permanently deleted (and is excluded from the public static site).
 
-## 4. Two-Way Sync & Safety Rails
+## 4. Sync Modes, Multi-User Merging & Public Safety Rails
 
 1. **Non-public URL filter**: Skips `file:`, `chrome:`, `about:`, `javascript:`, `moz-extension:`, `data:`, and private/local hosts (`localhost`, `*.local`, `*.internal`, RFC1918, loopback, link-local, ULA IPv6).
 2. **Credential & sensitive-param filter**: Skips `user:pass@` URLs and query keys like `token`, `api_key`, `secret`, `password`, `jwt`, `session`.
 3. **Tracking-parameter stripping**: Strips `utm_*`, `fbclid`, `gclid`, `si`, etc., updating the local browser URL under echo suppression so diffs stay clean.
-4. **First-sync dry-run preview**: New profiles run a dry-run merge and show exact pushes, pulls, and skipped URLs before committing.
+4. **First-sync dry-run preview**: New profiles run a dry-run merge and show exact pushes, pulls, archives, and skipped URLs before committing.
+
+Profiles support two sync modes:
+- **`two-way` (default)**: Mirrors the shared repository and the chosen browser folder cleanly in both directions.
+- **`contribute-only`**: Pushes the user's own additions, attribution, and un-saves into the shared repository without pulling teammates' links into the user's browser folder or deleting teammates' links.
+
+When multiple collaborators save the same normalized URL, Glyphrig merges their contributor handles (`by=alice,bob`), unions `#tags`, combines distinct notes idempotently, and preserves the earliest `added` date. The static site ranks unique URLs across folders on `/popular/` and groups each contributor's links on `/u/<username>/`.
 
 Conflict resolution uses a 3-way merge against `{ lastSyncedCommitSha, lastSyncedTree }`:
 - Edit vs. Delete -> **keep edited bookmark** (`kept-edited`).

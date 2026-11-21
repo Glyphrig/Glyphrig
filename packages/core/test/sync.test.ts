@@ -27,6 +27,8 @@ function bm(
     order: extra.order ?? 0,
     ...(extra.note !== undefined ? { note: extra.note } : {}),
     ...(extra.added !== undefined ? { added: extra.added } : {}),
+    ...(extra.savedBy !== undefined ? { savedBy: extra.savedBy } : {}),
+    ...(extra.archivedAt !== undefined ? { archivedAt: extra.archivedAt } : {}),
   };
 }
 
@@ -66,6 +68,10 @@ class InMemoryForgeAdapter implements ForgeAdapter {
       headSha: this.headSha,
       private: false,
     };
+  }
+
+  async getAuthenticatedUser() {
+    return { username: 'alice' };
   }
 
   async getHeadSha(): Promise<string | null> {
@@ -265,5 +271,243 @@ describe('threeWayMerge & SyncEngine', () => {
     expect(adapter.commitCalls).toHaveLength(2);
     expect(adapter.files.get('bookmarks/README.md')).toContain('https://new.example.org');
     expect(adapter.files.get('bookmarks/README.md')).not.toContain('localhost');
+  });
+
+  it('merges multiple contributors into by= sets, un-saves individually, and archives to .archived/ on final delete', async () => {
+    const adapter = new InMemoryForgeAdapter('sha-0', new Map());
+    const engine = new SyncEngine();
+
+    // 1. Alice adds Astro
+    const aliceLocal = treeFrom({
+      children: [
+        {
+          path: 'dev',
+          slug: 'dev',
+          title: 'Dev',
+          order: 0,
+          bookmarks: [bm('Astro', 'https://astro.build', { added: '2026-11-20' })],
+          children: [],
+        },
+      ],
+    });
+
+    const aliceSync = await engine.sync({
+      adapter,
+      branch: 'main',
+      rootDir: 'bookmarks',
+      localTree: aliceLocal,
+      snapshot: null,
+      currentUser: 'alice',
+    });
+    expect(adapter.files.get('bookmarks/dev/README.md')).toContain('by=alice');
+
+    // 2. Bob also adds Astro from his device (initial sync) -> merges into by=alice,bob
+    const bobLocal = treeFrom({
+      children: [
+        {
+          path: 'dev',
+          slug: 'dev',
+          title: 'Dev',
+          order: 0,
+          bookmarks: [
+            bm('Astro Docs', 'https://astro.build', {
+              note: 'Fast SSG',
+              tags: ['web'],
+            }),
+          ],
+          children: [],
+        },
+      ],
+    });
+
+    const bobSync = await engine.sync({
+      adapter,
+      branch: 'main',
+      rootDir: 'bookmarks',
+      localTree: bobLocal,
+      snapshot: null,
+      currentUser: 'bob',
+    });
+    const afterBobMd = adapter.files.get('bookmarks/dev/README.md')!;
+    expect(afterBobMd).toContain('by=alice,bob');
+    expect(afterBobMd).toContain('Fast SSG');
+    expect(afterBobMd).toContain('`#web`');
+
+    // 3. Alice syncs again (same user!) -> no self-double-counting, gets by=alice,bob in snapshot
+    const aliceResync = await engine.sync({
+      adapter,
+      branch: 'main',
+      rootDir: 'bookmarks',
+      localTree: aliceSync.mergedTree,
+      snapshot: aliceSync.snapshot,
+      currentUser: 'alice',
+    });
+    expect(adapter.files.get('bookmarks/dev/README.md')).toContain('by=alice,bob');
+
+    // 4. Bob deletes Astro locally -> only removes bob, keeps active for alice!
+    const bobDeleted = treeFrom({
+      children: [{ path: 'dev', slug: 'dev', title: 'Dev', order: 0, bookmarks: [], children: [] }],
+    });
+    await engine.sync({
+      adapter,
+      branch: 'main',
+      rootDir: 'bookmarks',
+      localTree: bobDeleted,
+      snapshot: bobSync.snapshot,
+      currentUser: 'bob',
+    });
+    expect(adapter.files.get('bookmarks/dev/README.md')).toContain('by=alice');
+    expect(adapter.files.get('bookmarks/dev/README.md')).not.toContain('bob');
+    expect(adapter.files.has('bookmarks/dev/.archived/README.md')).toBe(false);
+
+    // 5. Alice deletes Astro (sole remaining contributor) -> moves into bookmarks/dev/.archived/README.md!
+    const aliceDeleted = treeFrom({
+      children: [{ path: 'dev', slug: 'dev', title: 'Dev', order: 0, bookmarks: [], children: [] }],
+    });
+    const finalDel = await engine.sync({
+      adapter,
+      branch: 'main',
+      rootDir: 'bookmarks',
+      localTree: aliceDeleted,
+      snapshot: aliceResync.snapshot,
+      currentUser: 'alice',
+    });
+    expect(finalDel.archivedCount).toBe(1);
+    expect(adapter.files.get('bookmarks/dev/README.md')).not.toContain('https://astro.build');
+    const archiveFile = adapter.files.get('bookmarks/dev/.archived/README.md')!;
+    expect(archiveFile).toContain('https://astro.build');
+    expect(archiveFile).toContain('archived=');
+    expect(archiveFile).toContain('by=alice');
+
+    // 6. Alice restores Astro -> removes it cleanly from .archived/README.md
+    const aliceRestored = treeFrom({
+      children: [
+        {
+          path: 'dev',
+          slug: 'dev',
+          title: 'Dev',
+          order: 0,
+          bookmarks: [bm('Astro', 'https://astro.build')],
+          children: [],
+        },
+      ],
+    });
+    await engine.sync({
+      adapter,
+      branch: 'main',
+      rootDir: 'bookmarks',
+      localTree: aliceRestored,
+      snapshot: finalDel.snapshot,
+      currentUser: 'alice',
+    });
+    expect(adapter.files.get('bookmarks/dev/README.md')).toContain('https://astro.build');
+    expect(adapter.files.has('bookmarks/dev/.archived/README.md')).toBe(false);
+  });
+
+  it('supports contribute-only mode without pulling teammates links into browser or deleting them', async () => {
+    const remoteTree = treeFrom({
+      children: [
+        {
+          path: 'dev',
+          slug: 'dev',
+          title: 'Dev',
+          order: 0,
+          bookmarks: [
+            bm('Bob Link', 'https://bob.example.org', { savedBy: ['bob'], order: 0 }),
+            bm('Shared Link', 'https://shared.example.org', { savedBy: ['bob'], order: 1 }),
+          ],
+          children: [],
+        },
+        {
+          path: 'bob-only',
+          slug: 'bob-only',
+          title: 'Bob Only',
+          order: 1,
+          bookmarks: [bm('Bob Essay', 'https://essay.example.org', { savedBy: ['bob'] })],
+          children: [],
+        },
+      ],
+    });
+
+    const adapter = new InMemoryForgeAdapter(
+      'sha-0',
+      serializeBookmarkTree(remoteTree, 'bookmarks'),
+    );
+    const engine = new SyncEngine();
+
+    // Alice has only Shared Link and Alice Link locally in contribute-only mode
+    const aliceLocal1 = treeFrom({
+      children: [
+        {
+          path: 'dev',
+          slug: 'dev',
+          title: 'Dev',
+          order: 0,
+          bookmarks: [
+            bm('Shared Link', 'https://shared.example.org', { order: 0 }),
+            bm('Alice Link', 'https://alice.example.org', { order: 1 }),
+          ],
+          children: [],
+        },
+      ],
+    });
+
+    const res1 = await engine.sync({
+      adapter,
+      branch: 'main',
+      rootDir: 'bookmarks',
+      localTree: aliceLocal1,
+      snapshot: null,
+      syncMode: 'contribute-only',
+      currentUser: 'alice',
+    });
+
+    // Browser target must stay Alice's own local tree (Bob's links are NOT pulled into browser)
+    expect(res1.localPatchNeeded).toBe(false);
+    expect(res1.browserTargetTree.root.children.map((c) => c.path)).toEqual(['dev']);
+    expect(res1.browserTargetTree.root.children[0]?.bookmarks.map((b) => b.url)).toEqual([
+      'https://shared.example.org',
+      'https://alice.example.org',
+    ]);
+
+    // Remote repo preserves Bob's folders/links AND merges Alice's contribution
+    const devMd = adapter.files.get('bookmarks/dev/README.md')!;
+    expect(devMd).toContain('https://bob.example.org');
+    expect(devMd).toContain('https://alice.example.org');
+    expect(devMd).toContain('by=alice,bob');
+    expect(adapter.files.get('bookmarks/bob-only/README.md')).toContain('https://essay.example.org');
+
+    // Second sync: Alice deletes Alice Link locally -> archives Alice Link, keeps Bob's links intact
+    const aliceLocal2 = treeFrom({
+      children: [
+        {
+          path: 'dev',
+          slug: 'dev',
+          title: 'Dev',
+          order: 0,
+          bookmarks: [bm('Shared Link', 'https://shared.example.org', { order: 0 })],
+          children: [],
+        },
+      ],
+    });
+
+    const res2 = await engine.sync({
+      adapter,
+      branch: 'main',
+      rootDir: 'bookmarks',
+      localTree: aliceLocal2,
+      snapshot: res1.snapshot,
+      syncMode: 'contribute-only',
+      currentUser: 'alice',
+    });
+
+    expect(res2.archivedCount).toBe(1);
+    const devMd2 = adapter.files.get('bookmarks/dev/README.md')!;
+    expect(devMd2).toContain('https://bob.example.org');
+    expect(devMd2).toContain('https://shared.example.org');
+    expect(devMd2).not.toContain('https://alice.example.org');
+    expect(adapter.files.get('bookmarks/dev/.archived/README.md')).toContain(
+      'https://alice.example.org',
+    );
   });
 });

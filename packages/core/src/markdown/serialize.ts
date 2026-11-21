@@ -1,6 +1,11 @@
 import YAML from 'yaml';
 import type { BookmarkEntry, BookmarkTree, FolderNode } from '../types.js';
-import type { MarkdownBlock, ParsedFolderDocument } from './parse.js';
+import {
+  mergeBookmarkEntries,
+  normalizeUserList,
+  type MarkdownBlock,
+  type ParsedFolderDocument,
+} from './parse.js';
 import { folderPathToFilePath, normalizeRepoRootDir } from './slug.js';
 
 function escapeMarkdownTitle(title: string): string {
@@ -26,8 +31,19 @@ export function formatBookmarkLine(entry: BookmarkEntry): string {
     }
   }
 
+  const metaParts: string[] = [];
   if (entry.added && entry.added.trim()) {
-    parts.push(`<!-- glyphrig: added=${entry.added.trim()} -->`);
+    metaParts.push(`added=${entry.added.trim()}`);
+  }
+  const cleanBy = normalizeUserList(entry.savedBy);
+  if (cleanBy.length > 0) {
+    metaParts.push(`by=${cleanBy.join(',')}`);
+  }
+  if (entry.archivedAt && entry.archivedAt.trim()) {
+    metaParts.push(`archived=${entry.archivedAt.trim()}`);
+  }
+  if (metaParts.length > 0) {
+    parts.push(`<!-- glyphrig: ${metaParts.join(' ')} -->`);
   }
 
   return parts.join(' ');
@@ -67,6 +83,8 @@ function mergeBookmarkMetadata(
     note: incoming.note !== undefined ? incoming.note : existing.note,
     tags: incoming.tags.length > 0 ? incoming.tags : existing.tags,
     added: incoming.added !== undefined ? incoming.added : existing.added,
+    savedBy: incoming.savedBy !== undefined ? incoming.savedBy : existing.savedBy,
+    archivedAt: incoming.archivedAt !== undefined ? incoming.archivedAt : existing.archivedAt,
   };
 }
 
@@ -285,4 +303,68 @@ export function diffRepoFiles(
 
   deletes.sort();
   return { upserts, deletes };
+}
+
+export function serializeArchiveDocument(
+  folderPath: string,
+  folderTitle: string,
+  entries: BookmarkEntry[],
+  existingDoc?: ParsedFolderDocument,
+): string {
+  const byUrl = new Map<string, BookmarkEntry>();
+  for (const item of entries) {
+    const prev = byUrl.get(item.normalizedUrl);
+    if (!prev) {
+      byUrl.set(item.normalizedUrl, { ...item, tags: [...item.tags] });
+    } else {
+      const merged = mergeBookmarkEntries(prev, item);
+      const archivedAt =
+        [prev.archivedAt, item.archivedAt].filter(Boolean).sort().pop() ??
+        prev.archivedAt ??
+        item.archivedAt;
+      byUrl.set(item.normalizedUrl, {
+        ...merged,
+        ...(archivedAt ? { archivedAt } : {}),
+      });
+    }
+  }
+
+  const deduped = [...byUrl.values()].sort((a, b) => {
+    const da = a.archivedAt ?? '0000-00-00';
+    const db = b.archivedAt ?? '0000-00-00';
+    if (da !== db) return db.localeCompare(da);
+    return a.title.localeCompare(b.title);
+  });
+
+  const fm: Record<string, unknown> = {
+    title: `${folderTitle} (Archived)`,
+    archived: true,
+    ...(existingDoc?.extraFrontmatter ?? {}),
+  };
+  delete fm.order;
+  const frontmatter = `---\n${YAML.stringify(fm, { lineWidth: 0 }).trimEnd()}\n---`;
+
+  const introLines: string[] = [];
+  if (existingDoc) {
+    for (const block of existingDoc.blocks) {
+      if (block.type === 'bookmark') break;
+      introLines.push(block.raw);
+    }
+  }
+  const cleanIntro = collapseExcessBlankLines(introLines);
+  const bodyParts: string[] =
+    cleanIntro.length > 0
+      ? cleanIntro
+      : [
+          `Archived bookmarks removed from \`${folderPath ? `${folderPath}/README.md` : 'README.md'}\`.`,
+        ];
+
+  if (deduped.length > 0) {
+    bodyParts.push('');
+    for (const item of deduped) {
+      bodyParts.push(formatBookmarkLine(item));
+    }
+  }
+
+  return `${frontmatter}\n\n${bodyParts.join('\n')}\n`;
 }

@@ -1,0 +1,33 @@
+---
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import { contributorHref, siteData } from '../../lib/data.js';
+---
+
+<BaseLayout
+  title="Contributors"
+  description="Browse bookmarks by contributor"
+  activeNav="contributors"
+  indexForSearch={false}
+>
+  <header class="page-header">
+    <h1 class="page-title">Contributors</h1>
+    <p class="page-subtitle">
+      {siteData.contributors.length} contributor{siteData.contributors.length === 1 ? '' : 's'} curating {siteData.allBookmarks.length} bookmarks.
+    </p>
+  </header>
+
+  {siteData.contributors.length > 0 ? (
+    <div class="tag-grid">
+      {siteData.contributors.map((c) => (
+        <a href={contributorHref(c.slug)} class="tag-card">
+          <span>@{c.username}</span>
+          <span class="nav-count">{c.count}</span>
+        </a>
+      ))}
+    </div>
+  ) : (
+    <div class="empty-state">
+      No contributor attribution yet. Links synced via Glyphrig or Quick Add automatically record <code>by=username</code>.
+    </div>
+  )}
+</BaseLayout>

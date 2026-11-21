@@ -2,11 +2,17 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import {
   inspectUrlSafety,
+  normalizeUserList,
   parseBookmarkRepoFiles,
   type BookmarkTree,
   type FolderNode,
 } from '@glyphrig/core';
-import type { EnrichedBookmark, EnrichedFolderNode, TagSummary } from '@glyphrig/site';
+import type {
+  ContributorSummary,
+  EnrichedBookmark,
+  EnrichedFolderNode,
+  TagSummary,
+} from '@glyphrig/site';
 import { marked } from 'marked';
 import type { EnrichedUrlMeta } from './enrich.js';
 import { loadGlyphrigConfig } from './config.js';
@@ -94,10 +100,29 @@ export function buildEnrichedSiteTree(
   flatFolders: EnrichedFolderNode[];
   allBookmarks: EnrichedBookmark[];
   tags: TagSummary[];
+  contributors: ContributorSummary[];
 } {
   const flatFolders: EnrichedFolderNode[] = [];
   const allBookmarks: EnrichedBookmark[] = [];
   const tagCounts = new Map<string, number>();
+
+  // First pass: collect unique contributors globally per normalizedUrl
+  const globalSaversByUrl = new Map<string, Set<string>>();
+  function collectGlobalSavers(folder: FolderNode): void {
+    for (const bm of folder.bookmarks) {
+      const savers = normalizeUserList(bm.savedBy);
+      if (savers.length === 0) continue;
+      const set = globalSaversByUrl.get(bm.normalizedUrl) ?? new Set<string>();
+      for (const u of savers) set.add(u);
+      globalSaversByUrl.set(bm.normalizedUrl, set);
+    }
+    for (const child of folder.children) {
+      collectGlobalSavers(child);
+    }
+  }
+  collectGlobalSavers(tree.root);
+
+  const contributorUrls = new Map<string, Set<string>>();
 
   function convertFolder(
     folder: FolderNode,
@@ -124,10 +149,21 @@ export function buildEnrichedSiteTree(
         tagCounts.set(t, (tagCounts.get(t) ?? 0) + 1);
       }
 
+      const savedBy = normalizeUserList(bm.savedBy);
+      const globalSavedBy = [...(globalSaversByUrl.get(bm.normalizedUrl) ?? [])].sort();
+      for (const username of globalSavedBy) {
+        const urls = contributorUrls.get(username) ?? new Set<string>();
+        urls.add(bm.normalizedUrl);
+        contributorUrls.set(username, urls);
+      }
+
       const effectiveDescription = bm.note || meta?.description;
       const enriched: EnrichedBookmark = {
         ...bm,
         tags: mergedTags,
+        savedBy,
+        globalSavedBy,
+        popularity: globalSavedBy.length,
         id: `${folder.path || 'root'}-${idx}-${bm.normalizedUrl}`,
         domain: extractDomain(bm.url),
         folderPath: folder.path,
@@ -180,7 +216,16 @@ export function buildEnrichedSiteTree(
       count,
     }));
 
-  return { root, flatFolders, allBookmarks, tags };
+  const usedUserSlugs = new Set<string>();
+  const contributors: ContributorSummary[] = [...contributorUrls.entries()]
+    .sort((a, b) => b[1].size - a[1].size || a[0].localeCompare(b[0]))
+    .map(([username, urlSet]) => ({
+      username,
+      slug: slugifyTagForRoute(username, usedUserSlugs),
+      count: urlSet.size,
+    }));
+
+  return { root, flatFolders, allBookmarks, tags, contributors };
 }
 
 export interface ValidationReport {

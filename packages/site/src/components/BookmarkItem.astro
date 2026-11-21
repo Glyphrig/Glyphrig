@@ -1,6 +1,6 @@
 ---
 import type { EnrichedBookmark } from '../types.js';
-import { folderHref, siteData, tagHref, withBase } from '../lib/data.js';
+import { contributorHref, folderHref, siteData, tagHref, withBase } from '../lib/data.js';
 
 interface Props {
   bookmark: EnrichedBookmark;
@@ -9,6 +9,7 @@ interface Props {
 
 const { bookmark, showFolder = false } = Astro.props;
 const tagSlugMap = new Map(siteData.tags.map((t) => [t.tag, t.slug]));
+const contributorSlugMap = new Map(siteData.contributors.map((c) => [c.username, c.slug]));
 const monogram = (bookmark.domain || '?').replace(/^www\./, '').charAt(0).toUpperCase() || '?';
 ---
 
@@ -65,6 +66,14 @@ const monogram = (bookmark.domain || '?').replace(/^www\./, '').charAt(0).toUppe
     )}
 
     <div class="bm-meta">
+      {bookmark.popularity > 0 && (
+        <span
+          class="bm-popularity"
+          title={`Saved by ${bookmark.globalSavedBy.map((u) => `@${u}`).join(', ')}`}
+        >
+          ★ {bookmark.popularity}
+        </span>
+      )}
       {showFolder && (
         <a href={folderHref(bookmark.folderPath)} class="bm-folder-badge">
           {bookmark.folderTitle}
@@ -75,6 +84,14 @@ const monogram = (bookmark.domain || '?').replace(/^www\./, '').charAt(0).toUppe
         return (
           <a href={tagHref(slug)} class="bm-tag">
             #{tag}
+          </a>
+        );
+      })}
+      {bookmark.globalSavedBy.map((username) => {
+        const slug = contributorSlugMap.get(username) ?? encodeURIComponent(username);
+        return (
+          <a href={contributorHref(slug)} class="bm-contributor">
+            @{username}
           </a>
         );
       })}

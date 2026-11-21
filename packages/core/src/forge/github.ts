@@ -1,4 +1,5 @@
-import { filePathToFolderPath, normalizeRepoRootDir } from '../markdown/slug.js';
+import { normalizeUsername } from '../markdown/parse.js';
+import { isBookmarkOrArchiveFilePath, normalizeRepoRootDir } from '../markdown/slug.js';
 import {
   decodeBase64ToUtf8,
   encodeRefPath,
@@ -7,6 +8,7 @@ import {
 } from './encoding.js';
 import {
   ForgeError,
+  type AuthenticatedUser,
   type CommitChangesInput,
   type ForgeAdapter,
   type ForgeAdapterConfig,
@@ -110,6 +112,23 @@ export class GitHubAdapter implements ForgeAdapter {
     return { status: res.status, data };
   }
 
+  async getAuthenticatedUser(): Promise<AuthenticatedUser> {
+    const { data } = await this.requestJson<{
+      login?: string;
+      name?: string;
+      avatar_url?: string;
+    }>('/user');
+    const username = normalizeUsername(data?.login ?? '');
+    if (!username) {
+      throw new ForgeError('Unable to determine authenticated GitHub username', 500, 'unknown');
+    }
+    return {
+      username,
+      ...(data?.name ? { displayName: data.name } : {}),
+      ...(data?.avatar_url ? { avatarUrl: data.avatar_url } : {}),
+    };
+  }
+
   async testConnection(branch?: string): Promise<RepoConnectionInfo> {
     const { data: repoInfo } = await this.requestJson<{
       full_name: string;
@@ -171,7 +190,7 @@ export class GitHubAdapter implements ForgeAdapter {
 
     const matchingBlobs = (treeRes?.tree ?? []).filter(
       (item) =>
-        item.type === 'blob' && filePathToFolderPath(cleanRoot, item.path) !== null,
+        item.type === 'blob' && isBookmarkOrArchiveFilePath(cleanRoot, item.path),
     );
 
     const files = new Map<string, string>();

@@ -46,6 +46,15 @@ export interface EnrichedBookmark extends BookmarkEntry {
   ogImage?: string;
   faviconPath?: string;
   scrapedTitle?: string;
+  savedBy: string[];
+  globalSavedBy: string[];
+  popularity: number;
+}
+
+export interface ContributorSummary {
+  username: string;
+  slug: string;
+  count: number;
 }
 
 export interface EnrichedFolderNode {
@@ -73,6 +82,7 @@ export interface GlyphrigSiteData {
   flatFolders: EnrichedFolderNode[];
   allBookmarks: EnrichedBookmark[];
   tags: TagSummary[];
+  contributors: ContributorSummary[];
   customCssContent?: string;
   hasCustomFaviconAsset: boolean;
   generatedAt: string;

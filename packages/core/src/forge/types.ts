@@ -42,8 +42,15 @@ export interface CommitChangesInput {
   existingFileShas?: Map<string, string>;
 }
 
+export interface AuthenticatedUser {
+  username: string;
+  displayName?: string;
+  avatarUrl?: string;
+}
+
 export interface ForgeAdapter {
   readonly kind: ForgeKind;
+  getAuthenticatedUser(): Promise<AuthenticatedUser>;
   testConnection(branch?: string): Promise<RepoConnectionInfo>;
   getHeadSha(branch: string): Promise<string | null>;
   readBookmarkFiles(branch: string, rootDir: string): Promise<ReadBookmarkFilesResult>;

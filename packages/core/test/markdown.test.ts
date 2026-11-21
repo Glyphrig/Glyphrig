@@ -1,12 +1,18 @@
 import { describe, expect, it } from 'vitest';
 import {
+  archiveFilePathToFolderPath,
   assignSiblingSlugs,
   filePathToFolderPath,
+  folderPathToArchiveFilePath,
   folderPathToFilePath,
   formatBookmarkLine,
+  mergeBookmarkEntries,
+  mergeNotes,
+  parseArchiveRepoFiles,
   parseBookmarkLine,
   parseBookmarkRepoFiles,
   parseFolderMarkdown,
+  serializeArchiveDocument,
   serializeBookmarkTree,
   serializeFolderMarkdown,
   slugifyFolderName,
@@ -147,5 +153,69 @@ describe('bookmark line & document parser/serializer', () => {
     const reserialized = serializeBookmarkTree(tree, 'bookmarks', rawDocs);
     expect(reserialized.get('bookmarks/README.md')).toContain('Root intro.');
     expect(reserialized.get('bookmarks/dev/web/README.md')).toContain('title: Web Dev');
+  });
+
+  it('parses and round-trips by= attribution, archived= dates, merged notes, and .archived paths', () => {
+    expect(folderPathToArchiveFilePath('bookmarks', '')).toBe('bookmarks/.archived/README.md');
+    expect(folderPathToArchiveFilePath('bookmarks', 'dev/web')).toBe(
+      'bookmarks/dev/web/.archived/README.md',
+    );
+    expect(filePathToFolderPath('bookmarks', 'bookmarks/.archived/README.md')).toBeNull();
+    expect(filePathToFolderPath('bookmarks', 'bookmarks/dev/.archived/README.md')).toBeNull();
+    expect(archiveFilePathToFolderPath('bookmarks', 'bookmarks/.archived/README.md')).toBe('');
+    expect(archiveFilePathToFolderPath('bookmarks', 'bookmarks/dev/web/.archived/README.md')).toBe(
+      'dev/web',
+    );
+
+    const line =
+      '- [Astro](https://astro.build) — Fast SSG `#web` `#ssg` <!-- glyphrig: added=2026-11-20 by=alice,bob archived=2026-11-21 -->';
+    const parsed = parseBookmarkLine(line, 0);
+    expect(parsed?.savedBy).toEqual(['alice', 'bob']);
+    expect(parsed?.archivedAt).toBe('2026-11-21');
+    expect(formatBookmarkLine(parsed!)).toBe(line);
+
+    // Idempotent note & contributor merging
+    expect(mergeNotes('Fast SSG', 'fast ssg')).toBe('Fast SSG');
+    expect(mergeNotes('Fast SSG', 'Great islands')).toBe('Fast SSG / Great islands');
+    expect(mergeNotes('Fast SSG / Great islands', 'Great islands')).toBe(
+      'Fast SSG / Great islands',
+    );
+
+    const merged = mergeBookmarkEntries(
+      {
+        title: 'Astro',
+        url: 'https://astro.build',
+        normalizedUrl: 'https://astro.build',
+        note: 'Fast SSG',
+        tags: ['web'],
+        added: '2026-11-20',
+        savedBy: ['alice'],
+        order: 0,
+      },
+      {
+        title: 'Astro Framework',
+        url: 'https://astro.build',
+        normalizedUrl: 'https://astro.build',
+        note: 'Zero JS default',
+        tags: ['ssg', 'web'],
+        added: '2026-11-19',
+        savedBy: ['bob', 'alice'],
+        order: 1,
+      },
+    );
+    expect(merged.savedBy).toEqual(['alice', 'bob']);
+    expect(merged.tags).toEqual(['web', 'ssg']);
+    expect(merged.added).toBe('2026-11-19');
+    expect(merged.note).toBe('Fast SSG / Zero JS default');
+
+    const archiveMd = serializeArchiveDocument('dev', 'Dev', [
+      { ...merged, archivedAt: '2026-11-21' },
+    ]);
+    const archiveDocs = parseArchiveRepoFiles(
+      new Map([['bookmarks/dev/.archived/README.md', archiveMd]]),
+      'bookmarks',
+    );
+    expect(archiveDocs.get('dev')?.bookmarks).toHaveLength(1);
+    expect(archiveDocs.get('dev')?.bookmarks[0]?.archivedAt).toBe('2026-11-21');
   });
 });

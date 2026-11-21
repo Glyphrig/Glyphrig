@@ -120,14 +120,15 @@ async function handleMessage(msg: ExtensionMessage): Promise<unknown> {
       if (idx >= 0) {
         const prev = profiles[idx]!;
         next[idx] = msg.profile;
-        // Clear snapshot if target repo, branch, rootDir, or browser folder changed
+        // Clear snapshot if target repo, branch, rootDir, browser folder, or syncMode changed
         if (
           prev.forge !== msg.profile.forge ||
           prev.owner !== msg.profile.owner ||
           prev.repo !== msg.profile.repo ||
           prev.branch !== msg.profile.branch ||
           prev.rootDir !== msg.profile.rootDir ||
-          prev.rootFolderId !== msg.profile.rootFolderId
+          prev.rootFolderId !== msg.profile.rootFolderId ||
+          (prev.syncMode ?? 'two-way') !== (msg.profile.syncMode ?? 'two-way')
         ) {
           await saveSnapshot(msg.profile.id, null);
         }
@@ -170,7 +171,11 @@ async function handleMessage(msg: ExtensionMessage): Promise<unknown> {
         repo: msg.config.repo,
         token: msg.config.token,
       });
-      return adapter.testConnection(msg.config.branch);
+      const [info, user] = await Promise.all([
+        adapter.testConnection(msg.config.branch),
+        adapter.getAuthenticatedUser().catch(() => null),
+      ]);
+      return { ...info, ...(user ? { username: user.username } : {}) };
     }
 
     case 'START_GITHUB_DEVICE_FLOW': {

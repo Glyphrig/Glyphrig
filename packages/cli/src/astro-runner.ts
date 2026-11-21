@@ -125,6 +125,7 @@ async function prepareSiteData(options: {
     flatFolders: builtTree.flatFolders,
     allBookmarks: builtTree.allBookmarks,
     tags: builtTree.tags,
+    contributors: builtTree.contributors,
     ...(customCssContent ? { customCssContent } : {}),
     hasCustomFaviconAsset,
     generatedAt: new Date().toISOString(),

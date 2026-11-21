@@ -3,7 +3,7 @@ import FolderTreeNav from './FolderTreeNav.astro';
 import { siteData, withBase } from '../lib/data.js';
 
 interface Props {
-  activeNav: 'home' | 'recent' | 'tags' | 'folder';
+  activeNav: 'home' | 'recent' | 'popular' | 'tags' | 'contributors' | 'folder';
   activeFolderPath?: string;
 }
 
@@ -43,6 +43,14 @@ const { activeNav, activeFolderPath } = Astro.props;
       </li>
       <li>
         <a
+          href={withBase('popular/')}
+          class:list={['nav-item-link', { 'is-active': activeNav === 'popular' }]}
+        >
+          <span>Popular</span>
+        </a>
+      </li>
+      <li>
+        <a
           href={withBase('tags/')}
           class:list={['nav-item-link', { 'is-active': activeNav === 'tags' }]}
         >
@@ -50,6 +58,17 @@ const { activeNav, activeFolderPath } = Astro.props;
           <span class="nav-count">{siteData.tags.length}</span>
         </a>
       </li>
+      {siteData.contributors.length > 0 && (
+        <li>
+          <a
+            href={withBase('u/')}
+            class:list={['nav-item-link', { 'is-active': activeNav === 'contributors' }]}
+          >
+            <span>Contributors</span>
+            <span class="nav-count">{siteData.contributors.length}</span>
+          </a>
+        </li>
+      )}
     </ul>
   </nav>
 
