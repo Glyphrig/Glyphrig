@@ -16,13 +16,22 @@
 |---|---|---|
 | `@glyphrig/core` | [`packages/core`](packages/core/package.json) | Pure TypeScript Markdown engine, URL safety rails, 3-way sync engine, and forge adapters |
 | `@glyphrig/site` | [`packages/site`](packages/site/package.json) | Astro Editorial Digital Garden theme, feeds, Pagefind search, and PWA Quick Add |
-| `@glyphrig/cli` | [`packages/cli`](packages/cli/package.json) | Published CLI (`glyphrig build \| dev \| validate`) + cached URL enricher |
+| `@glyphrig/cli` | [`packages/cli`](packages/cli/package.json) | Published CLI (`glyphrig init \| build \| dev \| validate`) + cached URL enricher |
 | `@glyphrig/extension` | [`apps/extension`](apps/extension/package.json) | WXT MV3 extension for Chrome, Firefox Desktop, and Firefox for Android |
 
-Starter template repository: [`glyphrig_bookmark_template`](https://github.com/Glyphrig/glyphrig_bookmark_template)
+## Quick Start
+
+Scaffold a new data-only bookmark repository for GitHub Pages (or GitLab, Forgejo/Codeberg, Cloudflare Pages, Netlify, Vercel):
+
+```bash
+npx --yes @glyphrig/cli@0 init glyphrig_bookmarks
+```
+
+See the [Getting Started Guide](docs/GETTING_STARTED.md) for the complete setup walkthrough across browsers and mobile devices.
 
 ## Documentation
 
+- [Getting Started Guide (Personal Setup)](docs/GETTING_STARTED.md)
 - [Architecture Specification](docs/ARCHITECTURE.md)
 - [GitHub OAuth Device Flow Setup Guide](docs/GITHUB_OAUTH_SETUP.md)
 

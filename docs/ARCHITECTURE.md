@@ -33,7 +33,7 @@ Glyphrig is a two-way multi-browser bookmark synchronization extension paired wi
 
 - **`packages/core` (`@glyphrig/core`)**: Zero-Node-dependency core library shared across browser extensions, the Astro PWA client island, and the Node CLI.
 - **`packages/site` (`@glyphrig/site`)**: Astro static site template implementing the Editorial Digital Garden theme, nested folder/tag pages, Pagefind search modal, RSS/JSON feeds, and PWA Quick Add drawer.
-- **`packages/cli` (`@glyphrig/cli`)**: Published CLI (`glyphrig build | dev | validate`) that validates `glyphrig.config.yaml`, parses `bookmarks/**/README.md`, enriches URLs with disk caching, injects data via `virtual:glyphrig-data` into Astro without mutating `node_modules`, and emits the static site + Pagefind index + `sw.js`.
+- **`packages/cli` (`@glyphrig/cli`)**: Published CLI (`glyphrig init | build | dev | validate`) that scaffolds data-only bookmark repos, validates `glyphrig.config.yaml`, parses `bookmarks/**/README.md`, enriches URLs with disk caching, injects data via `virtual:glyphrig-data` into Astro without mutating `node_modules`, and emits the static site + Pagefind index + `sw.js`.
 - **`apps/extension` (`@glyphrig/extension`)**: WXT MV3 browser extension targeting Desktop Chrome, Desktop Firefox, and Firefox for Android (`gecko_android`).
 
 ## 3. Markdown-per-Folder Data Contract
