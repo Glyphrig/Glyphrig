@@ -28,11 +28,11 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Typecheck, test, and build
+      - name: Build, typecheck, and test
         run: |
+          pnpm build
           pnpm typecheck
           pnpm test
-          pnpm build
 
       - name: Package Chrome & Firefox extension zips
         run: |
@@ -40,10 +40,13 @@ jobs:
           pnpm --filter @glyphrig/extension zip:firefox
 
       - name: Publish @glyphrig packages to npm
-        if: ${{ secrets.NPM_TOKEN != '' }}
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
+          if [ -z "${NODE_AUTH_TOKEN:-}" ]; then
+            echo "::error::NPM_TOKEN secret is missing. Add NPM_TOKEN in GitHub repository Secrets -> Actions."
+            exit 1
+          fi
           pnpm --filter @glyphrig/core publish --no-git-checks --access public --provenance
           pnpm --filter @glyphrig/site publish --no-git-checks --access public --provenance
           pnpm --filter @glyphrig/cli publish --no-git-checks --access public --provenance

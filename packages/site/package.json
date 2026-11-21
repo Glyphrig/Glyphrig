@@ -2,6 +2,16 @@
   "name": "@glyphrig/site",
   "version": "0.1.0",
   "description": "Astro Editorial Digital Garden theme for Glyphrig static bookmark directories.",
+  "license": "MIT",
+  "homepage": "https://github.com/Glyphrig/Glyphrig#readme",
+  "bugs": {
+    "url": "https://github.com/Glyphrig/Glyphrig/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Glyphrig/Glyphrig.git",
+    "directory": "packages/site"
+  },
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",

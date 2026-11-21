@@ -22,11 +22,11 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Build all packages & browser extensions
+        run: pnpm build
+
       - name: Typecheck
         run: pnpm typecheck
 
       - name: Run unit & E2E tests
         run: pnpm test
-
-      - name: Build all packages & browser extensions
-        run: pnpm build

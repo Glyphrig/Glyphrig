@@ -7,7 +7,7 @@
   "scripts": {
     "build": "pnpm --filter @glyphrig/core build && pnpm --filter @glyphrig/site build && pnpm --filter @glyphrig/cli build && pnpm --filter @glyphrig/extension build && pnpm --filter @glyphrig/extension build:firefox",
     "test": "vitest run",
-    "typecheck": "pnpm -r typecheck",
+    "typecheck": "pnpm --filter @glyphrig/core build && pnpm --filter @glyphrig/site build && pnpm -r typecheck",
     "dev:ext:chrome": "pnpm --filter @glyphrig/extension dev",
     "dev:ext:firefox": "pnpm --filter @glyphrig/extension dev:firefox"
   },

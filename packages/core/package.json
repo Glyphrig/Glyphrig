@@ -2,6 +2,16 @@
   "name": "@glyphrig/core",
   "version": "0.1.0",
   "description": "Pure TypeScript core for Glyphrig: round-trip Markdown bookmark parser, safety rails, 3-way sync engine, and Git forge adapters.",
+  "license": "MIT",
+  "homepage": "https://github.com/Glyphrig/Glyphrig#readme",
+  "bugs": {
+    "url": "https://github.com/Glyphrig/Glyphrig/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Glyphrig/Glyphrig.git",
+    "directory": "packages/core"
+  },
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
