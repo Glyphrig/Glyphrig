@@ -1,0 +1,125 @@
+---
+import { siteData } from '../lib/data.js';
+
+interface Props {
+  tags?: Array<{ tag: string; slug: string; count: number }>;
+  defaultView?: 'list' | 'cards';
+  showViewToggle?: boolean;
+}
+
+const {
+  tags = [],
+  defaultView = siteData.config.theme.defaultView,
+  showViewToggle = true,
+} = Astro.props;
+const quickAddEnabled = siteData.config.pwa.quickAdd.enabled;
+---
+
+<div class="view-controls" data-default-view={defaultView}>
+  <div class="controls-left">
+    {tags.length > 0 && (
+      <>
+        <button
+          type="button"
+          class="pill-btn is-active"
+          data-filter-tag=""
+        >
+          All
+        </button>
+        {tags.slice(0, 12).map((item) => (
+          <button
+            type="button"
+            class="pill-btn"
+            data-filter-tag={item.tag}
+          >
+            #{item.tag} ({item.count})
+          </button>
+        ))}
+      </>
+    )}
+  </div>
+
+  <div class="controls-right">
+    {showViewToggle && (
+      <>
+        <button
+          type="button"
+          class="pill-btn"
+          data-set-view="list"
+          aria-pressed={defaultView === 'list' ? 'true' : 'false'}
+        >
+          List
+        </button>
+        <button
+          type="button"
+          class="pill-btn"
+          data-set-view="cards"
+          aria-pressed={defaultView === 'cards' ? 'true' : 'false'}
+        >
+          Cards
+        </button>
+      </>
+    )}
+    <button type="button" class="pill-btn" data-toggle-theme aria-label="Toggle color theme">
+      Theme
+    </button>
+    {quickAddEnabled && (
+      <button type="button" class="pill-btn pill-btn-primary" data-open-quickadd>
+        + Quick Add
+      </button>
+    )}
+  </div>
+</div>
+
+<script>
+  const VIEW_KEY = 'glyphrig-view-mode';
+  const collection = document.querySelector<HTMLElement>('[data-bookmark-collection]');
+  const defaultView =
+    document.querySelector<HTMLElement>('.view-controls')?.dataset.defaultView || 'list';
+
+  function applyView(view: string): void {
+    if (!collection) return;
+    collection.setAttribute('data-view', view);
+    document.querySelectorAll<HTMLButtonElement>('[data-set-view]').forEach((btn) => {
+      btn.setAttribute('aria-pressed', btn.dataset.setView === view ? 'true' : 'false');
+    });
+  }
+
+  const savedView = localStorage.getItem(VIEW_KEY) || defaultView;
+  applyView(savedView);
+
+  document.querySelectorAll<HTMLButtonElement>('[data-set-view]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const next = btn.dataset.setView || 'list';
+      localStorage.setItem(VIEW_KEY, next);
+      applyView(next);
+    });
+  });
+
+  // Inline tag filtering
+  const tagButtons = document.querySelectorAll<HTMLButtonElement>('[data-filter-tag]');
+  tagButtons.forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const selected = btn.dataset.filterTag || '';
+      tagButtons.forEach((b) => b.classList.toggle('is-active', b === btn));
+      document.querySelectorAll<HTMLElement>('[data-bookmark-item]').forEach((item) => {
+        if (!selected) {
+          item.hidden = false;
+          return;
+        }
+        const itemTags = (item.dataset.tags || '').split(',').filter(Boolean);
+        item.hidden = !itemTags.includes(selected);
+      });
+    });
+  });
+
+  // Theme toggle
+  document.querySelectorAll<HTMLButtonElement>('[data-toggle-theme]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const current = document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark' : 'light';
+      const next = current === 'dark' ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', next);
+      localStorage.setItem('glyphrig-theme', next);
+    });
+  });
+</script>

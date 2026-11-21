@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Glyphrig</title>
+    <link rel="stylesheet" href="./style.css" />
+  </head>
+  <body>
+    <main class="popup-root">
+      <header class="popup-head">
+        <div>
+          <h1>Glyphrig</h1>
+          <p class="muted" id="popup-subtitle">Git Bookmark Sync</p>
+        </div>
+        <button type="button" class="btn-secondary" id="btn-open-options">Settings</button>
+      </header>
+
+      <section id="empty-state" class="card" hidden>
+        <p>No bookmark folder profile configured yet.</p>
+        <button type="button" class="btn-primary" id="btn-setup">Configure Sync Profile</button>
+      </section>
+
+      <section id="profile-panel" hidden>
+        <div class="field" id="profile-select-wrap" hidden>
+          <label for="profile-select">Active Profile</label>
+          <select id="profile-select"></select>
+        </div>
+
+        <div class="card status-card">
+          <div class="row-between">
+            <strong id="profile-repo">—</strong>
+            <span class="badge" id="status-badge">Ready</span>
+          </div>
+          <p class="muted small" id="folder-label">Folder: —</p>
+          <p class="muted small" id="last-sync-label">Never synced</p>
+          <p class="warn-text small" id="preview-notice" hidden>
+            First-sync dry-run preview required before committing.
+          </p>
+        </div>
+
+        <div class="actions">
+          <button type="button" class="btn-primary" id="btn-sync-now">Sync Now</button>
+          <a class="btn-secondary" id="link-site" target="_blank" rel="noopener noreferrer" hidden>
+            Open Public Site
+          </a>
+        </div>
+
+        <p id="popup-feedback" class="small muted" aria-live="polite"></p>
+      </section>
+    </main>
+    <script type="module" src="./main.ts"></script>
+  </body>
+</html>

@@ -1,0 +1,172 @@
+---
+import { withBase } from '../lib/data.js';
+---
+
+<dialog
+  id="glyphrig-search-dialog"
+  class="glyphrig-dialog"
+  aria-labelledby="glyphrig-search-title"
+  data-pagefind-url={withBase('pagefind/pagefind.js')}
+  data-feed-url={withBase('feed.json')}
+>
+  <div class="dialog-head">
+    <h2 id="glyphrig-search-title" class="dialog-title">Search Bookmarks</h2>
+    <button type="button" class="pill-btn" data-close-search>Close (Esc)</button>
+  </div>
+  <div class="dialog-body">
+    <div class="field">
+      <label for="glyphrig-search-input">Keywords, domain, or tags</label>
+      <input
+        id="glyphrig-search-input"
+        type="search"
+        placeholder="Type to search bookmarks…"
+        autocomplete="off"
+      />
+    </div>
+    <p id="glyphrig-search-status" class="status-note">Type a query to search across all folders.</p>
+    <div id="glyphrig-search-results" class="search-results"></div>
+  </div>
+</dialog>
+
+<script>
+  interface PagefindApi {
+    init?: () => Promise<void>;
+    search: (term: string) => Promise<{
+      results: Array<{ data: () => Promise<{ url: string; meta?: { title?: string }; excerpt?: string }> }>;
+    }>;
+  }
+
+  interface FeedItem {
+    url: string;
+    title?: string;
+    content_text?: string;
+    tags?: string[];
+  }
+
+  const dialog = document.getElementById('glyphrig-search-dialog') as HTMLDialogElement | null;
+  const input = document.getElementById('glyphrig-search-input') as HTMLInputElement | null;
+  const statusEl = document.getElementById('glyphrig-search-status');
+  const resultsEl = document.getElementById('glyphrig-search-results');
+
+  let pagefindInstance: PagefindApi | null = null;
+  let feedFallback: FeedItem[] | null = null;
+  let loadAttempted = false;
+
+  async function ensureSearchBackend(): Promise<void> {
+    if (loadAttempted || !dialog) return;
+    loadAttempted = true;
+    const pagefindUrl = dialog.dataset.pagefindUrl || '/pagefind/pagefind.js';
+    try {
+      const mod = (await import(/* @vite-ignore */ pagefindUrl)) as PagefindApi;
+      if (mod.init) await mod.init();
+      pagefindInstance = mod;
+    } catch {
+      const feedUrl = dialog.dataset.feedUrl || '/feed.json';
+      try {
+        const res = await fetch(feedUrl);
+        if (res.ok) {
+          const json = (await res.json()) as { items?: FeedItem[] };
+          feedFallback = json.items ?? [];
+        }
+      } catch {
+        feedFallback = [];
+      }
+    }
+  }
+
+  function renderEntries(
+    entries: Array<{ title: string; href: string; snippet: string }>,
+  ): void {
+    if (!resultsEl || !statusEl) return;
+    resultsEl.innerHTML = '';
+    if (entries.length === 0) {
+      statusEl.textContent = 'No matching bookmarks found.';
+      return;
+    }
+    statusEl.textContent = `${entries.length} result${entries.length === 1 ? '' : 's'}`;
+    for (const item of entries) {
+      const link = document.createElement('a');
+      link.className = 'search-result-card';
+      link.href = item.href;
+      const strong = document.createElement('strong');
+      strong.textContent = item.title;
+      const snippet = document.createElement('div');
+      snippet.className = 'status-note';
+      snippet.innerHTML = item.snippet;
+      link.append(strong, snippet);
+      resultsEl.append(link);
+    }
+  }
+
+  let debounceHandle: number | undefined;
+
+  input?.addEventListener('input', () => {
+    window.clearTimeout(debounceHandle);
+    debounceHandle = window.setTimeout(async () => {
+      const q = input.value.trim();
+      if (!q) {
+        if (resultsEl) resultsEl.innerHTML = '';
+        if (statusEl) statusEl.textContent = 'Type a query to search across all folders.';
+        return;
+      }
+
+      await ensureSearchBackend();
+      if (pagefindInstance) {
+        const search = await pagefindInstance.search(q);
+        const top = search.results.slice(0, 15);
+        const resolved = await Promise.all(top.map((r) => r.data()));
+        renderEntries(
+          resolved.map((r) => ({
+            title: r.meta?.title || r.url,
+            href: r.url,
+            snippet: r.excerpt || r.url,
+          })),
+        );
+        return;
+      }
+
+      const lower = q.toLowerCase();
+      const matched = (feedFallback ?? [])
+        .filter((item) => {
+          const hay = `${item.title ?? ''} ${item.url} ${item.content_text ?? ''} ${(item.tags ?? []).join(' ')}`.toLowerCase();
+          return hay.includes(lower);
+        })
+        .slice(0, 15)
+        .map((item) => ({
+          title: item.title || item.url,
+          href: item.url,
+          snippet: item.content_text || item.url,
+        }));
+      renderEntries(matched);
+    }, 120);
+  });
+
+  function openSearch(): void {
+    if (!dialog) return;
+    if (!dialog.open) dialog.showModal();
+    input?.focus();
+    void ensureSearchBackend();
+  }
+
+  document.querySelectorAll('[data-open-search]').forEach((el) => {
+    el.addEventListener('click', openSearch);
+  });
+  document.querySelectorAll('[data-close-search]').forEach((el) => {
+    el.addEventListener('click', () => dialog?.close());
+  });
+  dialog?.addEventListener('click', (e) => {
+    if (e.target === dialog) dialog.close();
+  });
+
+  window.addEventListener('keydown', (e) => {
+    const tag = (document.activeElement?.tagName || '').toLowerCase();
+    const editing = tag === 'input' || tag === 'textarea' || tag === 'select';
+    if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
+      e.preventDefault();
+      openSearch();
+    } else if (!editing && e.key === '/') {
+      e.preventDefault();
+      openSearch();
+    }
+  });
+</script>

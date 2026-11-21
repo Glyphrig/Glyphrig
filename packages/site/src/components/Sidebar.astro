@@ -1,0 +1,71 @@
+---
+import FolderTreeNav from './FolderTreeNav.astro';
+import { siteData, withBase } from '../lib/data.js';
+
+interface Props {
+  activeNav: 'home' | 'recent' | 'tags' | 'folder';
+  activeFolderPath?: string;
+}
+
+const { activeNav, activeFolderPath } = Astro.props;
+---
+
+<aside class="sidebar" id="glyphrig-sidebar" aria-label="Navigation">
+  <a href={withBase('')} class="brand-link">
+    <span class="brand-title">{siteData.config.site.title}</span>
+    <span class="brand-count">{siteData.allBookmarks.length}</span>
+  </a>
+
+  <button type="button" class="search-trigger" data-open-search>
+    <span>Search links…</span>
+    <kbd class="kbd-hint">/</kbd>
+  </button>
+
+  <nav aria-label="Views">
+    <h2 class="nav-section-title">Explore</h2>
+    <ul class="nav-list">
+      <li>
+        <a
+          href={withBase('')}
+          class:list={['nav-item-link', { 'is-active': activeNav === 'home' }]}
+        >
+          <span>All Bookmarks</span>
+          <span class="nav-count">{siteData.allBookmarks.length}</span>
+        </a>
+      </li>
+      <li>
+        <a
+          href={withBase('recent/')}
+          class:list={['nav-item-link', { 'is-active': activeNav === 'recent' }]}
+        >
+          <span>Recently Added</span>
+        </a>
+      </li>
+      <li>
+        <a
+          href={withBase('tags/')}
+          class:list={['nav-item-link', { 'is-active': activeNav === 'tags' }]}
+        >
+          <span>Tags</span>
+          <span class="nav-count">{siteData.tags.length}</span>
+        </a>
+      </li>
+    </ul>
+  </nav>
+
+  {siteData.root.children.length > 0 && (
+    <nav aria-label="Folders">
+      <h2 class="nav-section-title">Folders</h2>
+      <FolderTreeNav
+        folders={siteData.root.children}
+        activeFolderPath={activeFolderPath}
+      />
+    </nav>
+  )}
+
+  <div class="sidebar-footer">
+    <a href={withBase('rss.xml')}>RSS</a>
+    <a href={withBase('feed.json')}>JSON Feed</a>
+    <a href="https://github.com/Glyphrig/Glyphrig" rel="noopener noreferrer">Glyphrig</a>
+  </div>
+</aside>

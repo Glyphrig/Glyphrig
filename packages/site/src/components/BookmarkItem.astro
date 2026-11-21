@@ -1,0 +1,84 @@
+---
+import type { EnrichedBookmark } from '../types.js';
+import { folderHref, siteData, tagHref, withBase } from '../lib/data.js';
+
+interface Props {
+  bookmark: EnrichedBookmark;
+  showFolder?: boolean;
+}
+
+const { bookmark, showFolder = false } = Astro.props;
+const tagSlugMap = new Map(siteData.tags.map((t) => [t.tag, t.slug]));
+const monogram = (bookmark.domain || '?').replace(/^www\./, '').charAt(0).toUpperCase() || '?';
+---
+
+<article
+  class="bookmark-item"
+  data-tags={bookmark.tags.join(',')}
+  data-bookmark-item
+>
+  <div class:list={['bm-og-wrap', { 'is-empty': !bookmark.ogImage }]}>
+    {bookmark.ogImage ? (
+      <img
+        src={bookmark.ogImage}
+        alt=""
+        class="bm-og-img"
+        loading="lazy"
+        decoding="async"
+      />
+    ) : (
+      <span>{bookmark.domain}</span>
+    )}
+  </div>
+
+  <div class="bm-body">
+    <div class="bm-row-top">
+      <div class="bm-title-group">
+        {bookmark.faviconPath ? (
+          <img
+            src={withBase(bookmark.faviconPath)}
+            alt=""
+            width="16"
+            height="16"
+            class="bm-favicon"
+            loading="lazy"
+            decoding="async"
+          />
+        ) : (
+          <span class="bm-monogram" aria-hidden="true">{monogram}</span>
+        )}
+        <a
+          href={bookmark.url}
+          class="bm-link"
+          target="_blank"
+          rel="noopener noreferrer"
+          data-bm-anchor
+        >
+          {bookmark.title}
+        </a>
+      </div>
+      <span class="bm-domain">{bookmark.domain}</span>
+    </div>
+
+    {bookmark.effectiveDescription && (
+      <p class="bm-desc">{bookmark.effectiveDescription}</p>
+    )}
+
+    <div class="bm-meta">
+      {showFolder && (
+        <a href={folderHref(bookmark.folderPath)} class="bm-folder-badge">
+          {bookmark.folderTitle}
+        </a>
+      )}
+      {bookmark.tags.map((tag) => {
+        const slug = tagSlugMap.get(tag) ?? encodeURIComponent(tag);
+        return (
+          <a href={tagHref(slug)} class="bm-tag">
+            #{tag}
+          </a>
+        );
+      })}
+      {bookmark.added && <span class="bm-date">{bookmark.added}</span>}
+    </div>
+  </div>
+</article>

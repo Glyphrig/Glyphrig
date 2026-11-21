@@ -1,0 +1,32 @@
+import { siteData, sortRecentBookmarks, withBase } from '../lib/data.js';
+
+export function GET() {
+  const siteUrl = siteData.config.site.url?.replace(/\/+$/, '') || '';
+  const homeUrl = siteUrl ? `${siteUrl}${withBase('')}` : withBase('');
+  const feedUrl = siteUrl ? `${siteUrl}${withBase('feed.json')}` : withBase('feed.json');
+  const items = sortRecentBookmarks(siteData.allBookmarks).slice(0, 100);
+
+  const payload = {
+    version: 'https://jsonfeed.org/version/1.1',
+    title: siteData.config.site.title,
+    home_page_url: homeUrl,
+    feed_url: feedUrl,
+    description: siteData.config.site.description,
+    items: items.map((bm) => ({
+      id: bm.id,
+      url: bm.url,
+      title: bm.title,
+      content_text: bm.effectiveDescription || bm.domain,
+      date_published: bm.added ? `${bm.added}T12:00:00Z` : siteData.generatedAt,
+      tags: bm.tags,
+      _glyphrig: {
+        folderPath: bm.folderPath,
+        folderTitle: bm.folderTitle,
+      },
+    })),
+  };
+
+  return new Response(JSON.stringify(payload, null, 2), {
+    headers: { 'Content-Type': 'application/feed+json; charset=utf-8' },
+  });
+}

@@ -1,0 +1,270 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="manifest.open_in_tab" content="true" />
+    <title>Glyphrig Settings</title>
+    <link rel="stylesheet" href="./style.css" />
+  </head>
+  <body>
+    <div class="container">
+      <header class="page-head">
+        <div>
+          <h1>Glyphrig Settings</h1>
+          <p class="muted">Two-way multi-browser bookmark sync to Git repositories.</p>
+        </div>
+        <div class="tabs" role="tablist">
+          <button type="button" class="tab-btn is-active" data-tab="profiles" role="tab">
+            Profiles
+          </button>
+          <button type="button" class="tab-btn" data-tab="logs" role="tab">
+            Sync &amp; Conflict Log
+          </button>
+          <button type="button" class="tab-btn" data-tab="oauth" role="tab">
+            OAuth &amp; About
+          </button>
+        </div>
+      </header>
+
+      <!-- PROFILES TAB -->
+      <section id="tab-profiles" class="tab-panel">
+        <div class="layout-two-col">
+          <aside class="card sidebar-card">
+            <div class="row-between">
+              <h2>Profiles</h2>
+              <button type="button" class="btn-secondary btn-sm" id="btn-new-profile">
+                + New
+              </button>
+            </div>
+            <ul id="profile-list" class="profile-list"></ul>
+          </aside>
+
+          <form id="profile-form" class="card form-card">
+            <div class="row-between">
+              <h2 id="form-heading">Edit Sync Profile</h2>
+              <button type="button" class="btn-danger btn-sm" id="btn-delete-profile" hidden>
+                Delete
+              </button>
+            </div>
+
+            <div class="grid-2">
+              <div class="field">
+                <label for="f-name">Profile Name</label>
+                <input id="f-name" type="text" required placeholder="Public Bookmarks" />
+              </div>
+              <div class="field">
+                <label for="f-forge">Git Forge</label>
+                <select id="f-forge">
+                  <option value="github">GitHub</option>
+                  <option value="gitlab">GitLab</option>
+                  <option value="forgejo">Forgejo / Codeberg / Gitea</option>
+                </select>
+              </div>
+            </div>
+
+            <div class="grid-2">
+              <div class="field">
+                <label for="f-owner">Owner / Group</label>
+                <input id="f-owner" type="text" required placeholder="username or org/group" />
+              </div>
+              <div class="field">
+                <label for="f-repo">Repository Name</label>
+                <input id="f-repo" type="text" required placeholder="my-bookmarks" />
+              </div>
+            </div>
+
+            <div class="grid-3">
+              <div class="field">
+                <label for="f-branch">Branch</label>
+                <input id="f-branch" type="text" required value="main" />
+              </div>
+              <div class="field">
+                <label for="f-rootdir">Repo Folder</label>
+                <input id="f-rootdir" type="text" required value="bookmarks" />
+              </div>
+              <div class="field">
+                <label for="f-instance">Instance URL (optional)</label>
+                <input id="f-instance" type="url" placeholder="https://codeberg.org" />
+              </div>
+            </div>
+
+            <div class="field">
+              <label for="f-siteurl">Published Site URL (optional)</label>
+              <input id="f-siteurl" type="url" placeholder="https://username.github.io/my-bookmarks/" />
+            </div>
+
+            <fieldset class="fieldset">
+              <legend>Authentication</legend>
+              <div id="github-device-box" class="device-box">
+                <div class="row-between">
+                  <div>
+                    <strong>GitHub OAuth Device Flow</strong>
+                    <p class="muted small" id="device-hint">
+                      Sign in without manually creating a token.
+                    </p>
+                  </div>
+                  <button type="button" class="btn-secondary" id="btn-device-login">
+                    Sign in with GitHub
+                  </button>
+                </div>
+                <div id="device-pending" class="device-pending" hidden>
+                  <p>
+                    Enter code <code id="device-user-code" class="code-pill">----</code> at
+                    <a id="device-verify-link" target="_blank" rel="noopener noreferrer">
+                      github.com/login/device
+                    </a>
+                  </p>
+                  <div class="row-gap">
+                    <button type="button" class="btn-secondary btn-sm" id="btn-copy-code">
+                      Copy Code
+                    </button>
+                    <span id="device-poll-status" class="muted small">Waiting for authorization…</span>
+                  </div>
+                </div>
+              </div>
+
+              <div class="field">
+                <label for="f-token">Personal Access Token</label>
+                <input
+                  id="f-token"
+                  type="password"
+                  required
+                  placeholder="Paste scoped token (stored in browser.storage.local only)"
+                />
+                <span id="token-scope-hint" class="muted small"></span>
+              </div>
+
+              <div class="row-gap">
+                <button type="button" class="btn-secondary" id="btn-test-conn">
+                  Test Connection
+                </button>
+                <span id="conn-status" class="small"></span>
+              </div>
+            </fieldset>
+
+            <fieldset class="fieldset">
+              <legend>Synced Bookmark Folder (never syncs all bookmarks)</legend>
+              <div class="row-between">
+                <span class="small muted" id="selected-folder-display">No folder selected</span>
+                <button type="button" class="btn-secondary btn-sm" id="btn-refresh-folders">
+                  Refresh Folders
+                </button>
+              </div>
+              <div id="folder-picker" class="folder-picker" role="listbox" aria-label="Bookmark folders"></div>
+            </fieldset>
+
+            <fieldset class="fieldset">
+              <legend>Sync Cadence &amp; Public Safety Rails</legend>
+              <label class="checkbox-row">
+                <input id="f-enabled" type="checkbox" checked />
+                <span>Enable this sync profile</span>
+              </label>
+              <label class="checkbox-row">
+                <input id="f-autosync" type="checkbox" checked />
+                <span>Automatic sync (debounced push + periodic pull)</span>
+              </label>
+
+              <div class="grid-2">
+                <div class="field">
+                  <label for="f-debounce">Push Debounce (seconds, min 30)</label>
+                  <input id="f-debounce" type="number" min="30" max="3600" value="60" />
+                </div>
+                <div class="field">
+                  <label for="f-pull-min">Periodic Pull (minutes, min 1)</label>
+                  <input id="f-pull-min" type="number" min="1" max="1440" value="15" />
+                </div>
+              </div>
+
+              <label class="checkbox-row">
+                <input id="s-private" type="checkbox" checked />
+                <span>Skip non-public URLs (<code>localhost</code>, LAN IPs, <code>*.local</code>, <code>file://</code>, <code>chrome://</code>)</span>
+              </label>
+              <label class="checkbox-row">
+                <input id="s-creds" type="checkbox" checked />
+                <span>Skip URLs with embedded credentials or secret params (<code>token=</code>, <code>api_key=</code>)</span>
+              </label>
+              <label class="checkbox-row">
+                <input id="s-tracking" type="checkbox" checked />
+                <span>Strip tracking query parameters (<code>utm_*</code>, <code>fbclid</code>, <code>gclid</code>)</span>
+              </label>
+              <label class="checkbox-row">
+                <input id="s-preview" type="checkbox" checked />
+                <span>Require dry-run preview before the initial commit of a profile</span>
+              </label>
+            </fieldset>
+
+            <p id="form-feedback" class="small" aria-live="polite"></p>
+
+            <div class="row-gap wrap">
+              <button type="submit" class="btn-primary">Save Profile</button>
+              <button type="button" class="btn-secondary" id="btn-preview-sync">
+                Preview Sync (Dry-Run)
+              </button>
+              <button type="button" class="btn-secondary" id="btn-sync-profile">
+                Sync Now
+              </button>
+            </div>
+          </form>
+        </div>
+      </section>
+
+      <!-- LOGS TAB -->
+      <section id="tab-logs" class="tab-panel" hidden>
+        <div class="card">
+          <div class="row-between">
+            <h2>Sync History &amp; Conflicts</h2>
+            <button type="button" class="btn-secondary btn-sm" id="btn-clear-logs">
+              Clear Logs
+            </button>
+          </div>
+
+          <h3>Conflicts</h3>
+          <div id="conflicts-list" class="log-list"></div>
+
+          <h3>Sync History</h3>
+          <div id="history-list" class="log-list"></div>
+        </div>
+      </section>
+
+      <!-- OAUTH & ABOUT TAB -->
+      <section id="tab-oauth" class="tab-panel" hidden>
+        <div class="card">
+          <h2>GitHub OAuth Device Flow Configuration</h2>
+          <p class="muted">
+            To enable one-click <strong>Sign in with GitHub</strong> without pasting a PAT,
+            create a GitHub OAuth App with <em>Enable Device Flow</em> checked (no Client Secret
+            is needed) and set <code>VITE_GITHUB_OAUTH_CLIENT_ID</code> at build time or override
+            it locally below.
+          </p>
+          <p class="small muted">
+            Build-time Client ID: <code id="effective-client-id">not set</code>
+          </p>
+          <div class="field">
+            <label for="oauth-override-input">Runtime GitHub OAuth Client ID Override</label>
+            <input id="oauth-override-input" type="text" placeholder="Ov23li..." />
+          </div>
+          <div class="row-gap">
+            <button type="button" class="btn-primary" id="btn-save-oauth-id">Save Client ID</button>
+            <span id="oauth-save-status" class="small"></span>
+          </div>
+        </div>
+      </section>
+    </div>
+
+    <!-- DRY-RUN PREVIEW MODAL -->
+    <dialog id="dry-run-modal" class="modal">
+      <div class="modal-head">
+        <h2>Sync Dry-Run Preview</h2>
+        <button type="button" class="btn-secondary btn-sm" id="btn-close-preview">Close</button>
+      </div>
+      <div id="dry-run-body" class="modal-body"></div>
+      <div class="modal-foot">
+        <button type="button" class="btn-secondary" id="btn-cancel-preview">Cancel</button>
+        <button type="button" class="btn-primary" id="btn-confirm-preview">Confirm &amp; Sync</button>
+      </div>
+    </dialog>
+
+    <script type="module" src="./main.ts"></script>
+  </body>
+</html>

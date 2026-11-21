@@ -1,0 +1,55 @@
+---
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import BookmarkItem from '../../components/BookmarkItem.astro';
+import ViewControls from '../../components/ViewControls.astro';
+import { siteData, withBase } from '../../lib/data.js';
+import type { TagSummary } from '../../types.js';
+
+export function getStaticPaths() {
+  return siteData.tags.map((summary) => ({
+    params: { tag: summary.slug },
+    props: { summary },
+  }));
+}
+
+interface Props {
+  summary: TagSummary;
+}
+
+const { summary } = Astro.props;
+const bookmarks = siteData.allBookmarks.filter((b) => b.tags.includes(summary.tag));
+---
+
+<BaseLayout
+  title={`#${summary.tag}`}
+  description={`Bookmarks tagged #${summary.tag}`}
+  activeNav="tags"
+  indexForSearch={false}
+>
+  <nav class="breadcrumbs" aria-label="Breadcrumbs">
+    <a href={withBase('')}>{siteData.root.title || 'Home'}</a>
+    <span aria-hidden="true">/</span>
+    <a href={withBase('tags/')}>Tags</a>
+    <span aria-hidden="true">/</span>
+    <span>#{summary.tag}</span>
+  </nav>
+
+  <header class="page-header">
+    <h1 class="page-title">#{summary.tag}</h1>
+    <p class="page-subtitle">
+      {bookmarks.length} bookmark{bookmarks.length === 1 ? '' : 's'}
+    </p>
+  </header>
+
+  <ViewControls />
+
+  <div
+    class="bookmark-collection"
+    data-bookmark-collection
+    data-view={siteData.config.theme.defaultView}
+  >
+    {bookmarks.map((bm) => (
+      <BookmarkItem bookmark={bm} showFolder={true} />
+    ))}
+  </div>
+</BaseLayout>

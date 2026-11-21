@@ -1,0 +1,42 @@
+{
+  "name": "@glyphrig/cli",
+  "version": "0.1.0",
+  "description": "CLI and static site builder for Glyphrig bookmark repositories.",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "bin": {
+    "glyphrig": "./dist/cli.js"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "build": "tsup",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@glyphrig/core": "workspace:*",
+    "@glyphrig/site": "workspace:*",
+    "astro": "^7.4.13",
+    "commander": "^15.1.0",
+    "marked": "^18.2.1",
+    "pagefind": "^1.6.0",
+    "yaml": "^2.9.1",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.6",
+    "tsup": "^9.0.0",
+    "typescript": "^5.9.3"
+  }
+}

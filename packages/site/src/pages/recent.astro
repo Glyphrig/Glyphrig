@@ -1,0 +1,39 @@
+---
+import BaseLayout from '../layouts/BaseLayout.astro';
+import BookmarkItem from '../components/BookmarkItem.astro';
+import ViewControls from '../components/ViewControls.astro';
+import { collectTagsInBookmarks, siteData, sortRecentBookmarks } from '../lib/data.js';
+
+const sorted = sortRecentBookmarks(siteData.allBookmarks);
+const tags = collectTagsInBookmarks(sorted);
+---
+
+<BaseLayout
+  title="Recently Added"
+  description="Chronological bookmark timeline"
+  activeNav="recent"
+  indexForSearch={false}
+>
+  <header class="page-header">
+    <h1 class="page-title">Recently Added</h1>
+    <p class="page-subtitle">
+      {sorted.length} bookmark{sorted.length === 1 ? '' : 's'} ordered newest first.
+    </p>
+  </header>
+
+  <ViewControls tags={tags} />
+
+  {sorted.length > 0 ? (
+    <div
+      class="bookmark-collection"
+      data-bookmark-collection
+      data-view={siteData.config.theme.defaultView}
+    >
+      {sorted.map((bm) => (
+        <BookmarkItem bookmark={bm} showFolder={true} />
+      ))}
+    </div>
+  ) : (
+    <div class="empty-state">No bookmarks yet.</div>
+  )}
+</BaseLayout>

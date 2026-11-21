@@ -1,0 +1,31 @@
+---
+import type { EnrichedFolderNode } from '../types.js';
+import { folderHref } from '../lib/data.js';
+
+interface Props {
+  folders: EnrichedFolderNode[];
+  activeFolderPath?: string;
+}
+
+const { folders, activeFolderPath } = Astro.props;
+---
+
+<ul class="folder-tree">
+  {folders.map((folder) => {
+    const isActive = activeFolderPath === folder.path;
+    return (
+      <li>
+        <a
+          href={folderHref(folder.path)}
+          class:list={['nav-item-link', { 'is-active': isActive }]}
+        >
+          <span>{folder.title}</span>
+          <span class="nav-count">{folder.totalBookmarkCount}</span>
+        </a>
+        {folder.children.length > 0 && (
+          <Astro.self folders={folder.children} activeFolderPath={activeFolderPath} />
+        )}
+      </li>
+    );
+  })}
+</ul>

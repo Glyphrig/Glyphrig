@@ -1,0 +1,92 @@
+---
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import BookmarkItem from '../../components/BookmarkItem.astro';
+import ViewControls from '../../components/ViewControls.astro';
+import {
+  collectTagsInBookmarks,
+  folderHref,
+  getFolderBreadcrumbs,
+  siteData,
+} from '../../lib/data.js';
+import type { EnrichedFolderNode } from '../../types.js';
+
+export function getStaticPaths() {
+  return siteData.flatFolders.map((folder) => ({
+    params: { folder: folder.path },
+    props: { folder },
+  }));
+}
+
+interface Props {
+  folder: EnrichedFolderNode;
+}
+
+const { folder } = Astro.props;
+const breadcrumbs = getFolderBreadcrumbs(folder);
+const folderTags = collectTagsInBookmarks(folder.bookmarks);
+---
+
+<BaseLayout
+  title={folder.title}
+  description={folder.description || `${folder.title} bookmarks`}
+  activeNav="folder"
+  activeFolderPath={folder.path}
+>
+  <nav class="breadcrumbs" aria-label="Breadcrumbs">
+    {breadcrumbs.map((crumb, idx) => (
+      <>
+        {idx > 0 && <span aria-hidden="true">/</span>}
+        {idx === breadcrumbs.length - 1 ? (
+          <span>{crumb.title}</span>
+        ) : (
+          <a href={crumb.href}>{crumb.title}</a>
+        )}
+      </>
+    ))}
+  </nav>
+
+  <header class="page-header">
+    <h1 class="page-title">{folder.title}</h1>
+    {folder.description && <p class="page-subtitle">{folder.description}</p>}
+  </header>
+
+  {folder.introHtml && (
+    <section class="folder-intro" set:html={folder.introHtml} />
+  )}
+
+  {folder.children.length > 0 && (
+    <section aria-label="Subfolders">
+      <div class="subfolder-grid">
+        {folder.children.map((child) => (
+          <a href={folderHref(child.path)} class="subfolder-card">
+            <div class="subfolder-card-top">
+              <span>{child.title}</span>
+              <span class="nav-count">{child.totalBookmarkCount}</span>
+            </div>
+            {child.description && (
+              <p class="subfolder-card-desc">{child.description}</p>
+            )}
+          </a>
+        ))}
+      </div>
+    </section>
+  )}
+
+  <ViewControls tags={folderTags} />
+
+  {folder.bookmarks.length > 0 ? (
+    <div
+      class="bookmark-collection"
+      data-bookmark-collection
+      data-view={siteData.config.theme.defaultView}
+    >
+      {folder.bookmarks.map((bm) => (
+        <BookmarkItem bookmark={bm} />
+      ))}
+    </div>
+  ) : (
+    <div class="empty-state">
+      This folder has no direct bookmarks yet.
+    </div>
+  )}
+</BaseLayout>

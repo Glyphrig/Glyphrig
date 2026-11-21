@@ -1,0 +1,164 @@
+---
+import '../styles/theme.css';
+import Sidebar from '../components/Sidebar.astro';
+import SearchModal from '../components/SearchModal.astro';
+import QuickAddDrawer from '../components/QuickAddDrawer.astro';
+import { siteData, withBase } from '../lib/data.js';
+
+interface Props {
+  title: string;
+  description?: string;
+  activeNav: 'home' | 'recent' | 'tags' | 'folder';
+  activeFolderPath?: string;
+  indexForSearch?: boolean;
+}
+
+const {
+  title,
+  description = siteData.config.site.description,
+  activeNav,
+  activeFolderPath,
+  indexForSearch = true,
+} = Astro.props;
+
+const fullTitle =
+  title === siteData.config.site.title
+    ? title
+    : `${title} — ${siteData.config.site.title}`;
+const accent = siteData.config.theme.accent || '#b45309';
+const faviconHref = siteData.hasCustomFaviconAsset
+  ? withBase('assets/favicon.svg')
+  : withBase('glyphrig-icon.svg');
+---
+
+<!doctype html>
+<html lang="en" style={`--accent: ${accent};`}>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>{fullTitle}</title>
+    <meta name="description" content={description} />
+    <link rel="icon" href={faviconHref} type="image/svg+xml" />
+    <link
+      rel="alternate"
+      type="application/rss+xml"
+      title={`${siteData.config.site.title} RSS`}
+      href={withBase('rss.xml')}
+    />
+    <link
+      rel="alternate"
+      type="application/feed+json"
+      title={`${siteData.config.site.title} JSON Feed`}
+      href={withBase('feed.json')}
+    />
+    {siteData.config.pwa.enabled && (
+      <link rel="manifest" href={withBase('manifest.webmanifest')} />
+    )}
+    {siteData.customCssContent && <style set:html={siteData.customCssContent} />}
+    <script is:inline>
+      (() => {
+        const stored = localStorage.getItem('glyphrig-theme');
+        const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+        const theme = stored === 'dark' || stored === 'light' ? stored : prefersDark ? 'dark' : 'light';
+        document.documentElement.setAttribute('data-theme', theme);
+      })();
+    </script>
+  </head>
+  <body>
+    <header class="mobile-bar">
+      <button
+        type="button"
+        class="icon-btn"
+        id="glyphrig-menu-toggle"
+        aria-label="Open folders menu"
+        aria-expanded="false"
+      >
+        ☰
+      </button>
+      <a href={withBase('')} class="brand-title" style="text-decoration:none;font-size:1.1rem;">
+        {siteData.config.site.title}
+      </a>
+      <button
+        type="button"
+        class="icon-btn"
+        data-open-search
+        aria-label="Search bookmarks"
+      >
+        Search
+      </button>
+    </header>
+
+    <div class="sidebar-backdrop" id="glyphrig-sidebar-backdrop"></div>
+
+    <div class="app-shell">
+      <Sidebar activeNav={activeNav} activeFolderPath={activeFolderPath} />
+      <div class="content-wrap">
+        <main
+          class="page-main"
+          data-pagefind-body={indexForSearch ? '' : undefined}
+          data-pagefind-ignore={indexForSearch ? undefined : 'all'}
+        >
+          <slot />
+        </main>
+      </div>
+    </div>
+
+    <SearchModal />
+    <QuickAddDrawer />
+
+    {siteData.config.pwa.enabled && (
+      <script define:vars={{ swUrl: withBase('sw.js'), swScope: withBase('') }}>
+        if ('serviceWorker' in navigator) {
+          window.addEventListener('load', () => {
+            navigator.serviceWorker.register(swUrl, { scope: swScope }).catch(() => {});
+          });
+        }
+      </script>
+    )}
+
+    <script>
+      const sidebar = document.getElementById('glyphrig-sidebar');
+      const backdrop = document.getElementById('glyphrig-sidebar-backdrop');
+      const menuBtn = document.getElementById('glyphrig-menu-toggle');
+
+      function setDrawer(open: boolean): void {
+        sidebar?.classList.toggle('is-open', open);
+        backdrop?.classList.toggle('is-open', open);
+        menuBtn?.setAttribute('aria-expanded', open ? 'true' : 'false');
+      }
+
+      menuBtn?.addEventListener('click', () => {
+        setDrawer(!sidebar?.classList.contains('is-open'));
+      });
+      backdrop?.addEventListener('click', () => setDrawer(false));
+
+      // Keyboard j/k bookmark navigation
+      let kbIndex = -1;
+      window.addEventListener('keydown', (e) => {
+        const tag = (document.activeElement?.tagName || '').toLowerCase();
+        if (tag === 'input' || tag === 'textarea' || tag === 'select') return;
+        if (document.querySelector('dialog[open]')) return;
+
+        const items = [...document.querySelectorAll<HTMLElement>('[data-bookmark-item]:not([hidden])')];
+        if (items.length === 0) return;
+
+        if (e.key === 'j') {
+          e.preventDefault();
+          kbIndex = Math.min(items.length - 1, kbIndex + 1);
+        } else if (e.key === 'k') {
+          e.preventDefault();
+          kbIndex = Math.max(0, kbIndex - 1);
+        } else if (e.key === 'Enter' && kbIndex >= 0 && items[kbIndex]) {
+          const anchor = items[kbIndex]?.querySelector<HTMLAnchorElement>('[data-bm-anchor]');
+          anchor?.click();
+          return;
+        } else {
+          return;
+        }
+
+        items.forEach((el, idx) => el.classList.toggle('is-kb-active', idx === kbIndex));
+        items[kbIndex]?.scrollIntoView({ block: 'nearest' });
+      });
+    </script>
+  </body>
+</html>

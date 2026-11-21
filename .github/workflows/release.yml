@@ -1,0 +1,56 @@
+name: Release Packages & Extension Bundles
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+  id-token: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    env:
+      VITE_GITHUB_OAUTH_CLIENT_ID: ${{ vars.VITE_GITHUB_OAUTH_CLIENT_ID || secrets.VITE_GITHUB_OAUTH_CLIENT_ID }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "pnpm"
+          registry-url: "https://registry.npmjs.org"
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Typecheck, test, and build
+        run: |
+          pnpm typecheck
+          pnpm test
+          pnpm build
+
+      - name: Package Chrome & Firefox extension zips
+        run: |
+          pnpm --filter @glyphrig/extension zip
+          pnpm --filter @glyphrig/extension zip:firefox
+
+      - name: Publish @glyphrig packages to npm
+        if: ${{ secrets.NPM_TOKEN != '' }}
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          pnpm --filter @glyphrig/core publish --no-git-checks --access public --provenance
+          pnpm --filter @glyphrig/site publish --no-git-checks --access public --provenance
+          pnpm --filter @glyphrig/cli publish --no-git-checks --access public --provenance
+
+      - name: Create GitHub Release with extension zips
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            apps/extension/.output/*.zip
+          generate_release_notes: true

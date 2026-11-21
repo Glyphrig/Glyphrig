@@ -1,0 +1,85 @@
+---
+import BaseLayout from '../layouts/BaseLayout.astro';
+import BookmarkItem from '../components/BookmarkItem.astro';
+import ViewControls from '../components/ViewControls.astro';
+import {
+  collectTagsInBookmarks,
+  folderHref,
+  siteData,
+  sortRecentBookmarks,
+  withBase,
+} from '../lib/data.js';
+
+const root = siteData.root;
+const recentBookmarks = sortRecentBookmarks(siteData.allBookmarks).slice(0, 12);
+const homeBookmarks = root.bookmarks.length > 0 ? root.bookmarks : recentBookmarks;
+const showingRootLinks = root.bookmarks.length > 0;
+const tagsForControls = collectTagsInBookmarks(homeBookmarks);
+---
+
+<BaseLayout
+  title={siteData.config.site.title}
+  description={siteData.config.site.description}
+  activeNav="home"
+>
+  <header class="page-header">
+    <h1 class="page-title">{siteData.config.site.title}</h1>
+    {siteData.config.site.description && (
+      <p class="page-subtitle">{siteData.config.site.description}</p>
+    )}
+  </header>
+
+  {root.introHtml && (
+    <section class="folder-intro" set:html={root.introHtml} />
+  )}
+
+  {root.children.length > 0 && (
+    <section aria-label="Folders">
+      <h2 class="section-heading">Folders</h2>
+      <div class="subfolder-grid">
+        {root.children.map((child) => (
+          <a href={folderHref(child.path)} class="subfolder-card">
+            <div class="subfolder-card-top">
+              <span>{child.title}</span>
+              <span class="nav-count">{child.totalBookmarkCount}</span>
+            </div>
+            {child.description && (
+              <p class="subfolder-card-desc">{child.description}</p>
+            )}
+          </a>
+        ))}
+      </div>
+    </section>
+  )}
+
+  <section aria-label={showingRootLinks ? 'Pinned Links' : 'Recently Added'}>
+    <h2 class="section-heading">
+      {showingRootLinks ? root.title : 'Recently Added'}
+    </h2>
+    <ViewControls tags={tagsForControls} />
+
+    {homeBookmarks.length > 0 ? (
+      <div
+        class="bookmark-collection"
+        data-bookmark-collection
+        data-view={siteData.config.theme.defaultView}
+      >
+        {homeBookmarks.map((bm) => (
+          <BookmarkItem bookmark={bm} showFolder={!showingRootLinks} />
+        ))}
+      </div>
+    ) : (
+      <div class="empty-state">
+        No bookmarks yet. Add Markdown links under <code>bookmarks/</code> or sync via the Glyphrig extension.
+      </div>
+    )}
+
+    {showingRootLinks && recentBookmarks.length > 0 && (
+      <p style="margin-top: 1.5rem;">
+        <a href={withBase('recent/')} class="pill-btn">
+          View all {siteData.allBookmarks.length} recently added links →
+        </a>
+      </p>
+    )}
+  </section>
+</BaseLayout>

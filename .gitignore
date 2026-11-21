@@ -1,0 +1,9 @@
+node_modules/
+dist/
+.output/
+.wxt/
+.astro/
+.glyphrig-cache/
+.env
+.env.local
+*.tsbuildinfo

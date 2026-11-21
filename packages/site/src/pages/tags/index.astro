@@ -1,0 +1,33 @@
+---
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import { siteData, tagHref } from '../../lib/data.js';
+---
+
+<BaseLayout
+  title="Tags"
+  description="Browse bookmarks by tag"
+  activeNav="tags"
+  indexForSearch={false}
+>
+  <header class="page-header">
+    <h1 class="page-title">Tags</h1>
+    <p class="page-subtitle">
+      {siteData.tags.length} tag{siteData.tags.length === 1 ? '' : 's'} across {siteData.allBookmarks.length} bookmarks.
+    </p>
+  </header>
+
+  {siteData.tags.length > 0 ? (
+    <div class="tag-grid">
+      {siteData.tags.map((item) => (
+        <a href={tagHref(item.slug)} class="tag-card">
+          <span>#{item.tag}</span>
+          <span class="nav-count">{item.count}</span>
+        </a>
+      ))}
+    </div>
+  ) : (
+    <div class="empty-state">
+      No tags yet. Add <code>`#tag`</code> annotations in your bookmark Markdown files to see them here.
+    </div>
+  )}
+</BaseLayout>
