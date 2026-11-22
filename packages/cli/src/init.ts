@@ -316,7 +316,7 @@ npx --yes @glyphrig/cli@0 build
 
   return `# ${opts.title}
 
-A data-only bookmark directory managed by **[Glyphrig](https://github.com/Glyphrig/Glyphrig)**.
+A data-only bookmark directory managed by **[Glyphrig](https://github.com/Glyphrig/Glyphrig)** — two-way browser-to-Git bookmark sync & static directory generator.
 
 ## Structure
 
@@ -338,6 +338,10 @@ ${deploySteps}
 npx --yes @glyphrig/cli@0 validate
 npx --yes @glyphrig/cli@0 dev
 \`\`\`
+
+---
+
+Powered by **[Glyphrig](https://github.com/Glyphrig/Glyphrig)** (\`npx @glyphrig/cli@0 init\`).
 `;
 }
 

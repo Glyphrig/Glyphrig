@@ -29,8 +29,13 @@ const feedbackEl = document.getElementById('popup-feedback')!;
 
 let currentState: ExtensionStatePayload | null = null;
 
-function openOptions(): void {
-  void browser.runtime.openOptionsPage();
+async function openOptions(): Promise<void> {
+  try {
+    await browser.tabs.create({ url: browser.runtime.getURL('options.html') });
+    window.close();
+  } catch {
+    await browser.runtime.openOptionsPage();
+  }
 }
 
 function render(state: ExtensionStatePayload): void {
