@@ -31,7 +31,7 @@ let currentState: ExtensionStatePayload | null = null;
 
 async function openOptions(): Promise<void> {
   try {
-    await browser.tabs.create({ url: browser.runtime.getURL('options.html') });
+    await browser.tabs.create({ url: browser.runtime.getURL('/options.html') });
     window.close();
   } catch {
     await browser.runtime.openOptionsPage();
@@ -49,18 +49,14 @@ function render(state: ExtensionStatePayload): void {
   emptyState.hidden = true;
   profilePanel.hidden = false;
 
-  if (state.profiles.length > 1) {
-    selectWrap.hidden = false;
-    profileSelect.innerHTML = '';
-    for (const p of state.profiles) {
-      const opt = document.createElement('option');
-      opt.value = p.id;
-      opt.textContent = p.name;
-      opt.selected = p.id === state.activeProfileId;
-      profileSelect.append(opt);
-    }
-  } else {
-    selectWrap.hidden = true;
+  selectWrap.hidden = false;
+  profileSelect.innerHTML = '';
+  for (const p of state.profiles) {
+    const opt = document.createElement('option');
+    opt.value = p.id;
+    opt.textContent = p.name;
+    opt.selected = p.id === state.activeProfileId;
+    profileSelect.append(opt);
   }
 
   const active =

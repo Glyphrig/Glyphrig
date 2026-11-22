@@ -504,6 +504,69 @@ document.getElementById('btn-new-profile')?.addEventListener('click', () => {
   renderState();
 });
 
+const backupStatusEl = document.getElementById('backup-status')!;
+const importConfigInput = document.getElementById('input-import-config') as HTMLInputElement;
+
+document.getElementById('btn-export-config')?.addEventListener('click', () => {
+  if (!state) return;
+  const payload = {
+    version: 1,
+    exportedAt: new Date().toISOString(),
+    profiles: state.profiles,
+    activeProfileId: state.activeProfileId,
+    githubOAuthClientIdOverride: state.githubOAuthClientIdOverride,
+  };
+  const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `glyphrig-config-backup-${new Date().toISOString().slice(0, 10)}.json`;
+  a.click();
+  URL.revokeObjectURL(url);
+  backupStatusEl.textContent = `Exported ${state.profiles.length} profile(s).`;
+});
+
+document.getElementById('btn-import-config')?.addEventListener('click', () => {
+  importConfigInput.value = '';
+  importConfigInput.click();
+});
+
+importConfigInput.addEventListener('change', async () => {
+  const file = importConfigInput.files?.[0];
+  if (!file) return;
+  try {
+    const parsed = JSON.parse(await file.text()) as {
+      profiles?: ProfileConfig[];
+      activeProfileId?: string | null;
+      githubOAuthClientIdOverride?: string;
+    };
+    if (!Array.isArray(parsed.profiles)) {
+      throw new Error('Invalid backup file: missing profiles array.');
+    }
+    for (const profile of parsed.profiles) {
+      await ensureOriginPermission(profile.instanceUrl);
+      state = await sendRpc<ExtensionStatePayload>({ type: 'SAVE_PROFILE', profile });
+    }
+    if (parsed.activeProfileId) {
+      state = await sendRpc<ExtensionStatePayload>({
+        type: 'SET_ACTIVE_PROFILE',
+        profileId: parsed.activeProfileId,
+      });
+    }
+    if (typeof parsed.githubOAuthClientIdOverride === 'string') {
+      state = await sendRpc<ExtensionStatePayload>({
+        type: 'SAVE_OAUTH_CLIENT_ID',
+        clientId: parsed.githubOAuthClientIdOverride,
+      });
+    }
+    loadProfileIntoForm(state?.profiles[0] ?? null);
+    renderState();
+    backupStatusEl.textContent = `Imported ${parsed.profiles.length} profile(s).`;
+  } catch (err) {
+    backupStatusEl.textContent = err instanceof Error ? err.message : 'Import failed.';
+  }
+});
+
 document.getElementById('btn-refresh-folders')?.addEventListener('click', async () => {
   folders = await sendRpc<SelectableFolderNode[]>({ type: 'LIST_FOLDERS' });
   renderFolderPicker();

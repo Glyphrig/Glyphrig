@@ -2,6 +2,11 @@ import { defineConfig } from 'wxt';
 
 export default defineConfig({
   srcDir: 'src',
+  vite: () => ({
+    build: {
+      modulePreload: false,
+    },
+  }),
   manifest: ({ browser }) => ({
     name: 'Glyphrig',
     description:

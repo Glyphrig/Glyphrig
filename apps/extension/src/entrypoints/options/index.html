@@ -38,6 +38,17 @@
               </button>
             </div>
             <ul id="profile-list" class="profile-list"></ul>
+            <hr style="border: 0; border-top: 1px solid var(--border, #e5e7eb); margin: 14px 0;" />
+            <div class="row-gap wrap">
+              <button type="button" class="btn-secondary btn-sm" id="btn-export-config">
+                Export Backup
+              </button>
+              <button type="button" class="btn-secondary btn-sm" id="btn-import-config">
+                Import Backup
+              </button>
+              <input id="input-import-config" type="file" accept="application/json,.json" hidden />
+            </div>
+            <p id="backup-status" class="small muted"></p>
           </aside>
 
           <form id="profile-form" class="card form-card">
