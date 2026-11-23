@@ -236,6 +236,8 @@ export async function buildSite(options: BuildSiteOptions = {}): Promise<BuildSi
     cliPkgRoot,
     `.glyphrig-stage-${process.pid}-${crypto.randomBytes(4).toString('hex')}`,
   );
+  const prevCwd = process.cwd();
+  process.chdir(cliPkgRoot);
 
   try {
     await astroBuild(
@@ -258,6 +260,7 @@ export async function buildSite(options: BuildSiteOptions = {}): Promise<BuildSi
 
     await copyDirRecursive(astroOutDir, outDir);
   } finally {
+    process.chdir(prevCwd);
     await fs.rm(astroOutDir, { recursive: true, force: true });
   }
 
