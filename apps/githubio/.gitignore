@@ -1,0 +1,4 @@
+.next/
+out/
+public/PRIVACY.md
+next-env.d.ts

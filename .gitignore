@@ -3,6 +3,8 @@ dist/
 .output/
 .wxt/
 .astro/
+.next/
+apps/githubio/out/
 .glyphrig-cache/
 .env
 .env.local

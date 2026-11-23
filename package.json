@@ -1,6 +1,6 @@
 {
   "name": "glyphrig-monorepo",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "private": true,
   "type": "module",
   "packageManager": "pnpm@12.9.1",
@@ -9,7 +9,9 @@
     "test": "vitest run",
     "typecheck": "pnpm --filter @glyphrig/core build && pnpm --filter @glyphrig/site build && pnpm -r typecheck",
     "dev:ext:chrome": "pnpm --filter @glyphrig/extension dev",
-    "dev:ext:firefox": "pnpm --filter @glyphrig/extension dev:firefox"
+    "dev:ext:firefox": "pnpm --filter @glyphrig/extension dev:firefox",
+    "dev:website": "pnpm --filter @glyphrig/githubio dev",
+    "build:website": "pnpm --filter @glyphrig/githubio build"
   },
   "devDependencies": {
     "@types/node": "^26.6.6",
