@@ -83,8 +83,42 @@ describe('config loader & base path inference', () => {
     const withCliOverride = await loadGlyphrigConfig({
       cwd: dir,
       cliBase: '/custom-override',
+      cliTheme: './my-theme',
       env: {},
     });
     expect(withCliOverride.config.site.base).toBe('/custom-override/');
+    expect(withCliOverride.config.theme.use).toBe('./my-theme');
+    expect(withCliOverride.themeExplicit.accent).toBe(true);
+    expect(withCliOverride.themeExplicit.colorScheme).toBe(false);
+  });
+
+  it('supports theme string shorthand and colorScheme/customHead fields', async () => {
+    const dir = await makeTempDir();
+    await fs.writeFile(
+      path.join(dir, 'glyphrig.config.yaml'),
+      'site:\n  title: Shorthand Theme\ntheme: terminal\n',
+      'utf8',
+    );
+    const shortRes = await loadGlyphrigConfig({ cwd: dir, env: {} });
+    expect(shortRes.config.theme.use).toBe('terminal');
+    expect(shortRes.themeExplicit.accent).toBe(false);
+
+    await fs.writeFile(
+      path.join(dir, 'glyphrig.config.yaml'),
+      [
+        'theme:',
+        '  use: ./theme',
+        '  colorScheme: dark',
+        '  customCss: assets/custom.css',
+        '  customHead: assets/head.html',
+      ].join('\n'),
+      'utf8',
+    );
+    const fullRes = await loadGlyphrigConfig({ cwd: dir, env: {} });
+    expect(fullRes.config.theme.use).toBe('./theme');
+    expect(fullRes.config.theme.colorScheme).toBe('dark');
+    expect(fullRes.config.theme.customCss).toBe('assets/custom.css');
+    expect(fullRes.config.theme.customHead).toBe('assets/head.html');
+    expect(fullRes.themeExplicit.colorScheme).toBe(true);
   });
 });

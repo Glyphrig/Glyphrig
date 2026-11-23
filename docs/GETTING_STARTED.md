@@ -93,8 +93,12 @@ site:
   # base: /glyphrig_bookmarks/ # Auto-inferred on GitHub Actions; set explicitly if needed
 
 theme:
+  # use: editorial          # Built-in: editorial | minimal | terminal | nord, or "./theme"
   accent: "#b45309"
-  defaultView: list # "list" | "cards"
+  defaultView: list         # "list" | "cards"
+  # colorScheme: system     # "system" | "light" | "dark"
+  # customCss: assets/custom.css
+  # customHead: assets/head.html
 
 enrichment:
   enabled: true
@@ -117,6 +121,8 @@ pwa:
 ```
 
 > **Security rule:** Never place Personal Access Tokens inside `glyphrig.config.yaml` or commit tokens to Git. `pwa.quickAdd` stores only public repository coordinates; your PAT lives strictly in that browser's `localStorage`.
+
+Want to use another built-in preset, restyle with CSS, or supply a full custom Astro theme? See the **[Theming Guide](./THEMING.md)** (or run `npx --yes @glyphrig/cli@0 theme list`).
 
 ---
 

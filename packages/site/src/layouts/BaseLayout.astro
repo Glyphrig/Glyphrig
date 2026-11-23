@@ -1,5 +1,5 @@
 ---
-import '../styles/theme.css';
+import 'virtual:glyphrig-theme.css';
 import Sidebar from '../components/Sidebar.astro';
 import SearchModal from '../components/SearchModal.astro';
 import QuickAddDrawer from '../components/QuickAddDrawer.astro';
@@ -25,14 +25,15 @@ const fullTitle =
   title === siteData.config.site.title
     ? title
     : `${title} — ${siteData.config.site.title}`;
-const accent = siteData.config.theme.accent || '#b45309';
+const colorScheme = siteData.config.theme.colorScheme || 'system';
+const themeName = siteData.themeName || 'editorial';
 const faviconHref = siteData.hasCustomFaviconAsset
   ? withBase('assets/favicon.svg')
   : withBase('glyphrig-icon.svg');
 ---
 
 <!doctype html>
-<html lang="en" style={`--accent: ${accent};`}>
+<html lang="en" data-color-scheme={colorScheme} data-theme-name={themeName}>
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
@@ -54,12 +55,20 @@ const faviconHref = siteData.hasCustomFaviconAsset
     {siteData.config.pwa.enabled && (
       <link rel="manifest" href={withBase('manifest.webmanifest')} />
     )}
-    {siteData.customCssContent && <style set:html={siteData.customCssContent} />}
+    {siteData.themeHeadContent && <Fragment set:html={siteData.themeHeadContent} />}
+    {siteData.customHeadContent && <Fragment set:html={siteData.customHeadContent} />}
     <script is:inline>
       (() => {
         const stored = localStorage.getItem('glyphrig-theme');
+        const defaultScheme = document.documentElement.getAttribute('data-color-scheme') || 'system';
         const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
-        const theme = stored === 'dark' || stored === 'light' ? stored : prefersDark ? 'dark' : 'light';
+        const fallback =
+          defaultScheme === 'dark' || defaultScheme === 'light'
+            ? defaultScheme
+            : prefersDark
+              ? 'dark'
+              : 'light';
+        const theme = stored === 'dark' || stored === 'light' ? stored : fallback;
         document.documentElement.setAttribute('data-theme', theme);
       })();
     </script>

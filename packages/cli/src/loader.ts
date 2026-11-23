@@ -16,6 +16,7 @@ import type {
 import { marked } from 'marked';
 import type { EnrichedUrlMeta } from './enrich.js';
 import { loadGlyphrigConfig } from './config.js';
+import { resolveTheme } from './theme.js';
 
 export async function readBookmarkDirectory(inputDir: string): Promise<Map<string, string>> {
   const files = new Map<string, string>();
@@ -252,6 +253,27 @@ export async function validateBookmarksRepo(options: {
     });
     if (!cfgRes.configFound) {
       warnings.push('No glyphrig.config.yaml found; default settings will be used.');
+    }
+    try {
+      await resolveTheme(cfgRes.config.theme.use, cwd);
+    } catch (themeErr) {
+      errors.push(themeErr instanceof Error ? themeErr.message : String(themeErr));
+    }
+    if (cfgRes.config.theme.customCss) {
+      const cssPath = path.resolve(cwd, cfgRes.config.theme.customCss);
+      try {
+        await fs.access(cssPath);
+      } catch {
+        errors.push(`Configured theme.customCss file not found: ${cssPath}`);
+      }
+    }
+    if (cfgRes.config.theme.customHead) {
+      const headPath = path.resolve(cwd, cfgRes.config.theme.customHead);
+      try {
+        await fs.access(headPath);
+      } catch {
+        errors.push(`Configured theme.customHead file not found: ${headPath}`);
+      }
     }
   } catch (err) {
     errors.push(err instanceof Error ? err.message : String(err));

@@ -32,6 +32,7 @@ See the [Getting Started Guide](docs/GETTING_STARTED.md) for the complete setup 
 ## Documentation
 
 - [Getting Started Guide (Personal Setup)](docs/GETTING_STARTED.md)
+- [Customizing & Authoring Themes](docs/THEMING.md)
 - [Architecture Specification](docs/ARCHITECTURE.md)
 - [GitHub OAuth Device Flow Setup Guide](docs/GITHUB_OAUTH_SETUP.md)
 

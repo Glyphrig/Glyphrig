@@ -28,19 +28,26 @@ const GlyphrigConfigSchema = z.object({
       description: 'Curated public bookmarks.',
       author: '',
     }),
-  theme: z
-    .object({
-      accent: z
-        .string()
-        .regex(/^#[0-9a-fA-F]{3,8}$/, 'theme.accent must be a hex color like #b45309')
-        .default('#b45309'),
-      defaultView: z.enum(['list', 'cards']).default('list'),
-      customCss: z.string().optional(),
-    })
-    .default({
-      accent: '#b45309',
-      defaultView: 'list',
-    }),
+  theme: z.preprocess(
+    (val) => (typeof val === 'string' ? { use: val } : val),
+    z
+      .object({
+        use: z.string().min(1).optional(),
+        accent: z
+          .string()
+          .regex(/^#[0-9a-fA-F]{3,8}$/, 'theme.accent must be a hex color like #b45309')
+          .default('#b45309'),
+        defaultView: z.enum(['list', 'cards']).default('list'),
+        colorScheme: z.enum(['system', 'light', 'dark']).default('system'),
+        customCss: z.string().optional(),
+        customHead: z.string().optional(),
+      })
+      .default({
+        accent: '#b45309',
+        defaultView: 'list',
+        colorScheme: 'system',
+      }),
+  ),
   enrichment: z
     .object({
       enabled: z.boolean().default(true),
@@ -120,12 +127,24 @@ export interface LoadConfigOptions {
   configPath?: string;
   cwd?: string;
   cliBase?: string;
+  cliTheme?: string;
   env?: NodeJS.ProcessEnv;
+}
+
+export interface ThemeExplicitFlags {
+  accent: boolean;
+  defaultView: boolean;
+  colorScheme: boolean;
 }
 
 export async function loadGlyphrigConfig(
   options: LoadConfigOptions = {},
-): Promise<{ config: SiteConfig; configFound: boolean; resolvedPath?: string }> {
+): Promise<{
+  config: SiteConfig;
+  configFound: boolean;
+  resolvedPath?: string;
+  themeExplicit: ThemeExplicitFlags;
+}> {
   const cwd = options.cwd ?? process.cwd();
   const candidates = options.configPath
     ? [path.resolve(cwd, options.configPath)]
@@ -177,6 +196,18 @@ export async function loadGlyphrigConfig(
       ? normalizeSiteBase(parsed.site.base)
       : await inferBasePath(cwd, options.env);
 
+  const rawTheme =
+    rawObj.theme && typeof rawObj.theme === 'object' && !Array.isArray(rawObj.theme)
+      ? (rawObj.theme as Record<string, unknown>)
+      : {};
+  const themeExplicit: ThemeExplicitFlags = {
+    accent: rawTheme.accent !== undefined,
+    defaultView: rawTheme.defaultView !== undefined,
+    colorScheme: rawTheme.colorScheme !== undefined,
+  };
+
+  const resolvedThemeUse = options.cliTheme?.trim() || parsed.theme.use;
+
   const config: SiteConfig = {
     site: {
       title: parsed.site.title,
@@ -186,9 +217,13 @@ export async function loadGlyphrigConfig(
       base: resolvedBase,
     },
     theme: {
+      ...(resolvedThemeUse ? { use: resolvedThemeUse } : {}),
       accent: parsed.theme.accent,
+      accentExplicit: themeExplicit.accent,
       defaultView: parsed.theme.defaultView,
+      colorScheme: parsed.theme.colorScheme,
       ...(parsed.theme.customCss ? { customCss: parsed.theme.customCss } : {}),
+      ...(parsed.theme.customHead ? { customHead: parsed.theme.customHead } : {}),
     },
     enrichment: parsed.enrichment,
     pwa: parsed.pwa,
@@ -198,5 +233,6 @@ export async function loadGlyphrigConfig(
     config,
     configFound: Boolean(foundPath),
     ...(foundPath ? { resolvedPath: foundPath } : {}),
+    themeExplicit,
   };
 }

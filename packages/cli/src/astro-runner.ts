@@ -9,9 +9,14 @@ import { loadGlyphrigConfig } from './config.js';
 import { enrichBookmarks, type EnrichStats } from './enrich.js';
 import { buildEnrichedSiteTree, readBookmarkDirectory } from './loader.js';
 import { generateServiceWorkerScript } from './sw-generator.js';
+import { applyBasePlaceholder, resolveTheme, type ResolvedTheme } from './theme.js';
 
 const VIRTUAL_MODULE_ID = 'virtual:glyphrig-data';
 const RESOLVED_VIRTUAL_ID = `\0${VIRTUAL_MODULE_ID}`;
+const VIRTUAL_THEME_CSS_ID = 'virtual:glyphrig-theme.css';
+const RESOLVED_VIRTUAL_THEME_CSS_ID = `\0${VIRTUAL_THEME_CSS_ID}`;
+const VIRTUAL_HELPERS_ID = 'virtual:glyphrig-helpers';
+const SITE_HELPERS_PATH = path.join(SITE_ROOT, 'src', 'lib', 'data.ts');
 
 const DEFAULT_ICON_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none">
   <rect width="64" height="64" rx="14" fill="#faf8f5"/>
@@ -27,6 +32,7 @@ export interface BuildSiteOptions {
   outDir?: string;
   cacheDir?: string;
   base?: string;
+  theme?: string;
   noEnrich?: boolean;
   allowPrivateUrlsForTest?: boolean;
 }
@@ -37,6 +43,7 @@ export interface BuildSiteResult {
   folderCount: number;
   enrichStats: EnrichStats;
   config: SiteConfig;
+  themeName: string;
 }
 
 async function exists(filePath: string): Promise<boolean> {
@@ -68,17 +75,34 @@ async function prepareSiteData(options: {
   configPath?: string;
   cacheDir: string;
   cliBase?: string;
+  cliTheme?: string;
   noEnrich?: boolean;
   allowPrivateUrlsForTest?: boolean;
 }): Promise<{
   siteData: GlyphrigSiteData;
   enrichStats: EnrichStats;
+  resolvedTheme: ResolvedTheme;
+  composedThemeCss: string;
 }> {
-  const { config } = await loadGlyphrigConfig({
+  const { config, themeExplicit } = await loadGlyphrigConfig({
     configPath: options.configPath,
     cwd: options.cwd,
     cliBase: options.cliBase,
+    cliTheme: options.cliTheme,
   });
+
+  const resolvedTheme = await resolveTheme(config.theme.use, options.cwd);
+
+  // Apply theme defaults for fields not explicitly configured in glyphrig.config.yaml
+  if (!themeExplicit.accent && resolvedTheme.defaults.accent) {
+    config.theme.accent = resolvedTheme.defaults.accent;
+  }
+  if (!themeExplicit.defaultView && resolvedTheme.defaults.defaultView) {
+    config.theme.defaultView = resolvedTheme.defaults.defaultView;
+  }
+  if (!themeExplicit.colorScheme && resolvedTheme.defaults.colorScheme) {
+    config.theme.colorScheme = resolvedTheme.defaults.colorScheme;
+  }
 
   const files = await readBookmarkDirectory(options.inputDir);
   const { tree } = parseBookmarkRepoFiles(files, 'bookmarks');
@@ -110,10 +134,53 @@ async function prepareSiteData(options: {
   let customCssContent: string | undefined;
   if (config.theme.customCss) {
     const cssPath = path.resolve(options.cwd, config.theme.customCss);
-    if (await exists(cssPath)) {
-      customCssContent = await fs.readFile(cssPath, 'utf8');
+    if (!(await exists(cssPath))) {
+      throw new Error(`Configured theme.customCss file not found: ${cssPath}`);
+    }
+    customCssContent = await fs.readFile(cssPath, 'utf8');
+  }
+
+  let customHeadContent: string | undefined;
+  if (config.theme.customHead) {
+    const headPath = path.resolve(options.cwd, config.theme.customHead);
+    if (!(await exists(headPath))) {
+      throw new Error(`Configured theme.customHead file not found: ${headPath}`);
+    }
+    customHeadContent = applyBasePlaceholder(
+      await fs.readFile(headPath, 'utf8'),
+      config.site.base,
+    );
+  }
+
+  const themeHeadContent = resolvedTheme.headHtml
+    ? applyBasePlaceholder(resolvedTheme.headHtml, config.site.base)
+    : undefined;
+
+  // Compose the virtual stylesheet in deterministic cascade order:
+  // 1. Base stylesheet (unless theme mode is "replace")
+  // 2. Active theme stylesheet (preset / theme.css)
+  // 3. Explicit theme.accent override from glyphrig.config.yaml
+  // 4. User's theme.customCss override
+  const cssParts: string[] = [];
+  if (resolvedTheme.mode !== 'replace') {
+    const activeBaseCssPath = path.join(resolvedTheme.astroRoot, 'src', 'styles', 'theme.css');
+    const fallbackBaseCssPath = path.join(SITE_ROOT, 'src', 'styles', 'theme.css');
+    if (await exists(activeBaseCssPath)) {
+      cssParts.push(await fs.readFile(activeBaseCssPath, 'utf8'));
+    } else if (await exists(fallbackBaseCssPath)) {
+      cssParts.push(await fs.readFile(fallbackBaseCssPath, 'utf8'));
     }
   }
+  if (resolvedTheme.cssContent) {
+    cssParts.push(resolvedTheme.cssContent);
+  }
+  if (themeExplicit.accent) {
+    cssParts.push(`:root {\n  --accent: ${config.theme.accent};\n}`);
+  }
+  if (customCssContent) {
+    cssParts.push(customCssContent);
+  }
+  const composedThemeCss = cssParts.join('\n\n');
 
   const hasCustomFaviconAsset = await exists(
     path.join(options.cwd, 'assets', 'favicon.svg'),
@@ -126,29 +193,73 @@ async function prepareSiteData(options: {
     allBookmarks: builtTree.allBookmarks,
     tags: builtTree.tags,
     contributors: builtTree.contributors,
+    themeName: resolvedTheme.name,
+    replaceBaseCss: resolvedTheme.mode === 'replace',
+    ...(resolvedTheme.cssContent ? { themeCssContent: resolvedTheme.cssContent } : {}),
+    ...(themeHeadContent ? { themeHeadContent } : {}),
     ...(customCssContent ? { customCssContent } : {}),
+    ...(customHeadContent ? { customHeadContent } : {}),
     hasCustomFaviconAsset,
     generatedAt: new Date().toISOString(),
   };
 
-  return { siteData, enrichStats: enrichResult.stats };
+  return { siteData, enrichStats: enrichResult.stats, resolvedTheme, composedThemeCss };
 }
 
 function createVirtualDataPlugin(
   siteData: GlyphrigSiteData,
-  devPaths?: { cwd: string; cacheDir: string; base: string },
+  composedThemeCss: string,
+  cliPkgRoot: string,
+  devPaths?: { cwd: string; cacheDir: string; base: string; themeAssetsDir?: string },
 ) {
+  const cliPkgJson = path.join(cliPkgRoot, 'package.json');
+
   return {
     name: 'glyphrig-virtual-data',
-    resolveId(id: string) {
+    async resolveId(
+      this: {
+        resolve: (
+          source: string,
+          importer?: string,
+          options?: Record<string, unknown>,
+        ) => Promise<{ id: string } | null>;
+      },
+      id: string,
+      importer?: string,
+      options?: Record<string, unknown>,
+    ) {
       if (id === VIRTUAL_MODULE_ID) {
         return RESOLVED_VIRTUAL_ID;
+      }
+      if (id === VIRTUAL_THEME_CSS_ID) {
+        return RESOLVED_VIRTUAL_THEME_CSS_ID;
+      }
+      if (id === VIRTUAL_HELPERS_ID) {
+        return SITE_HELPERS_PATH;
+      }
+      if (
+        importer &&
+        importer !== cliPkgJson &&
+        !id.startsWith('.') &&
+        !id.startsWith('/') &&
+        !id.startsWith('\0') &&
+        !id.startsWith('virtual:') &&
+        !id.startsWith('astro:') &&
+        !id.startsWith('node:') &&
+        !id.includes('://')
+      ) {
+        const direct = await this.resolve(id, importer, { ...options, skipSelf: true });
+        if (direct) return direct;
+        return this.resolve(id, cliPkgJson, { ...options, skipSelf: true });
       }
       return undefined;
     },
     load(id: string) {
       if (id === RESOLVED_VIRTUAL_ID) {
         return `export const siteData = ${JSON.stringify(siteData)};`;
+      }
+      if (id === RESOLVED_VIRTUAL_THEME_CSS_ID) {
+        return composedThemeCss;
       }
       return undefined;
     },
@@ -199,6 +310,20 @@ function createVirtualDataPlugin(
             return;
           }
         }
+        if (devPaths.themeAssetsDir && rel.startsWith('theme-assets/')) {
+          const sub = rel.slice('theme-assets/'.length);
+          const themeAssetsRoot = path.resolve(devPaths.themeAssetsDir);
+          const candidate = path.resolve(themeAssetsRoot, sub);
+          if (candidate.startsWith(themeAssetsRoot + path.sep)) {
+            fs.readFile(candidate)
+              .then((buf) => {
+                res.statusCode = 200;
+                res.end(buf);
+              })
+              .catch(() => next());
+            return;
+          }
+        }
         next();
       });
     },
@@ -211,12 +336,13 @@ export async function buildSite(options: BuildSiteOptions = {}): Promise<BuildSi
   const outDir = path.resolve(cwd, options.outDir ?? 'dist');
   const cacheDir = path.resolve(cwd, options.cacheDir ?? '.glyphrig-cache');
 
-  const { siteData, enrichStats } = await prepareSiteData({
+  const { siteData, enrichStats, resolvedTheme, composedThemeCss } = await prepareSiteData({
     cwd,
     inputDir,
     configPath: options.configPath,
     cacheDir,
     cliBase: options.base,
+    cliTheme: options.theme,
     noEnrich: options.noEnrich,
     allowPrivateUrlsForTest: options.allowPrivateUrlsForTest,
   });
@@ -225,13 +351,12 @@ export async function buildSite(options: BuildSiteOptions = {}): Promise<BuildSi
   await fs.mkdir(outDir, { recursive: true });
   await fs.mkdir(cacheDir, { recursive: true });
 
-  const plugin = createVirtualDataPlugin(siteData);
-
   // Astro writes `.prerender/prerender-entry.*.mjs` inside `astroOutDir` and imports it
   // with Node's ESM resolver, which walks up from `astroOutDir` for `node_modules` (e.g.
   // `piccolore`). Staging inside the CLI package root ensures `node_modules` is always
   // an ancestor even when `npx @glyphrig/cli build` runs in a data-only repo.
   const cliPkgRoot = path.resolve(import.meta.dirname, '..');
+  const plugin = createVirtualDataPlugin(siteData, composedThemeCss, cliPkgRoot);
   const astroOutDir = path.join(
     cliPkgRoot,
     `.glyphrig-stage-${process.pid}-${crypto.randomBytes(4).toString('hex')}`,
@@ -243,7 +368,7 @@ export async function buildSite(options: BuildSiteOptions = {}): Promise<BuildSi
     await astroBuild(
       {
         configFile: false,
-        root: SITE_ROOT,
+        root: resolvedTheme.astroRoot,
         outDir: astroOutDir,
         cacheDir: path.join(cacheDir, 'astro'),
         base: siteData.config.site.base,
@@ -251,6 +376,11 @@ export async function buildSite(options: BuildSiteOptions = {}): Promise<BuildSi
         vite: {
           cacheDir: path.join(cacheDir, 'vite'),
           plugins: [plugin as never],
+          server: {
+            fs: {
+              allow: [resolvedTheme.astroRoot, SITE_ROOT, cliPkgRoot, cwd],
+            },
+          },
         },
         logLevel: 'warn',
       },
@@ -278,6 +408,11 @@ export async function buildSite(options: BuildSiteOptions = {}): Promise<BuildSi
         await fs.copyFile(src, path.join(outFavDir, fileName));
       }
     }
+  }
+
+  // Copy theme assets/ directory if present
+  if (resolvedTheme.assetsDir && (await exists(resolvedTheme.assetsDir))) {
+    await copyDirRecursive(resolvedTheme.assetsDir, path.join(outDir, 'theme-assets'));
   }
 
   // Copy user assets/ directory if present
@@ -329,6 +464,7 @@ export async function buildSite(options: BuildSiteOptions = {}): Promise<BuildSi
     folderCount: siteData.flatFolders.length + 1,
     enrichStats,
     config: siteData.config,
+    themeName: resolvedTheme.name,
   };
 }
 
@@ -338,6 +474,7 @@ export interface DevSiteOptions {
   configPath?: string;
   cacheDir?: string;
   base?: string;
+  theme?: string;
   port?: number;
   noEnrich?: boolean;
 }
@@ -349,25 +486,28 @@ export async function devSite(
   const inputDir = path.resolve(cwd, options.inputDir ?? 'bookmarks');
   const cacheDir = path.resolve(cwd, options.cacheDir ?? '.glyphrig-cache');
 
-  const { siteData } = await prepareSiteData({
+  const { siteData, resolvedTheme, composedThemeCss } = await prepareSiteData({
     cwd,
     inputDir,
     configPath: options.configPath,
     cacheDir,
     cliBase: options.base,
+    cliTheme: options.theme,
     noEnrich: options.noEnrich,
   });
 
   await fs.mkdir(cacheDir, { recursive: true });
-  const plugin = createVirtualDataPlugin(siteData, {
+  const cliPkgRoot = path.resolve(import.meta.dirname, '..');
+  const plugin = createVirtualDataPlugin(siteData, composedThemeCss, cliPkgRoot, {
     cwd,
     cacheDir,
     base: siteData.config.site.base,
+    ...(resolvedTheme.assetsDir ? { themeAssetsDir: resolvedTheme.assetsDir } : {}),
   });
 
   return astroDev({
     configFile: false,
-    root: SITE_ROOT,
+    root: resolvedTheme.astroRoot,
     cacheDir: path.join(cacheDir, 'astro'),
     base: siteData.config.site.base,
     ...(siteData.config.site.url ? { site: siteData.config.site.url } : {}),
@@ -377,6 +517,11 @@ export async function devSite(
     vite: {
       cacheDir: path.join(cacheDir, 'vite'),
       plugins: [plugin as never],
+      server: {
+        fs: {
+          allow: [resolvedTheme.astroRoot, SITE_ROOT, cliPkgRoot, cwd],
+        },
+      },
     },
     logLevel: 'info',
   });

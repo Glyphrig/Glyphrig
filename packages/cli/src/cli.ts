@@ -12,13 +12,14 @@ import {
   type InitQuickAddOptions,
 } from './init.js';
 import { validateBookmarksRepo } from './loader.js';
+import { BUILTIN_THEMES, ejectDefaultTheme, scaffoldTheme } from './theme.js';
 
 const program = new Command();
 
 program
   .name('glyphrig')
   .description('Scaffold, build, preview, and validate a static Glyphrig bookmark directory site.')
-  .version('0.3.5');
+  .version('0.4.0');
 
 async function promptInitOptions(
   dirArg: string,
@@ -216,6 +217,7 @@ program
   .option('-o, --out <dir>', 'Output directory', 'dist')
   .option('--cache-dir <dir>', 'Enrichment & Astro cache directory', '.glyphrig-cache')
   .option('--base <path>', 'Override URL base path (e.g. /my-repo/)')
+  .option('--theme <spec>', 'Override theme (preset name, local folder/CSS path, or npm package)')
   .option('--no-enrich', 'Skip build-time URL metadata & favicon fetching')
   .action(async (opts) => {
     const result = await buildSite({
@@ -224,11 +226,12 @@ program
       outDir: opts.out,
       cacheDir: opts.cacheDir,
       base: opts.base,
+      theme: opts.theme,
       noEnrich: opts.enrich === false,
     });
 
     console.log(
-      `Glyphrig built ${result.bookmarkCount} bookmarks across ${result.folderCount} folders -> ${result.outDir}`,
+      `Glyphrig built ${result.bookmarkCount} bookmarks across ${result.folderCount} folders (theme: ${result.themeName}) -> ${result.outDir}`,
     );
     console.log(
       `Enrichment: ${result.enrichStats.cacheHits} cached, ${result.enrichStats.fetchedOk} fetched, ${result.enrichStats.failed} failed, ${result.enrichStats.skippedUnsafe} skipped`,
@@ -242,6 +245,7 @@ program
   .option('-c, --config <file>', 'Path to glyphrig.config.yaml')
   .option('--cache-dir <dir>', 'Enrichment & Astro cache directory', '.glyphrig-cache')
   .option('--base <path>', 'Override URL base path')
+  .option('--theme <spec>', 'Override theme (preset name, local folder/CSS path, or npm package)')
   .option('-p, --port <number>', 'Port to listen on', '4321')
   .option('--no-enrich', 'Skip build-time URL metadata & favicon fetching')
   .action(async (opts) => {
@@ -251,10 +255,82 @@ program
       configPath: opts.config,
       cacheDir: opts.cacheDir,
       base: opts.base,
+      theme: opts.theme,
       port,
       noEnrich: opts.enrich === false,
     });
     console.log(`Glyphrig dev server running at http://localhost:${server.address.port}`);
+  });
+
+const themeCmd = program
+  .command('theme')
+  .description('List built-in themes or scaffold/eject a custom theme');
+
+themeCmd
+  .command('list')
+  .description('List built-in theme presets')
+  .action(() => {
+    console.log('Built-in Glyphrig themes:\n');
+    for (const preset of BUILTIN_THEMES) {
+      console.log(
+        `  ${preset.id.padEnd(11)} ${preset.name} (default: ${preset.defaultColorScheme}, accent: ${preset.defaultAccent})`,
+      );
+      console.log(`              ${preset.description}`);
+    }
+    console.log('\nUse any preset in glyphrig.config.yaml via `theme: { use: terminal }` or pass `--theme terminal`.');
+  });
+
+themeCmd
+  .command('init [dir]')
+  .description('Scaffold a custom CSS or Astro theme directory')
+  .option('--type <css|astro>', 'Theme kind: css (default) or astro', 'css')
+  .option('--mode <extend|replace>', 'For CSS themes: extend default CSS or replace it completely', 'extend')
+  .option('--name <name>', 'Theme display name')
+  .option('--force', 'Overwrite existing files in target directory')
+  .action(async (dir = 'theme', opts) => {
+    const type = String(opts.type).toLowerCase();
+    if (type !== 'css' && type !== 'astro') {
+      throw new Error(`Invalid --type "${opts.type}". Expected "css" or "astro".`);
+    }
+    const mode = String(opts.mode).toLowerCase();
+    if (mode !== 'extend' && mode !== 'replace') {
+      throw new Error(`Invalid --mode "${opts.mode}". Expected "extend" or "replace".`);
+    }
+    const res = await scaffoldTheme({
+      targetDir: path.resolve(process.cwd(), dir),
+      type,
+      mode,
+      name: opts.name,
+      force: Boolean(opts.force),
+    });
+    console.log(`Scaffolded custom ${res.type} theme in ${res.targetDir}`);
+    for (const file of res.created) {
+      console.log(`  + ${file}`);
+    }
+    for (const file of res.skipped) {
+      console.log(`  ~ skipped existing ${file}`);
+    }
+    const rel = dir.startsWith('.') || path.isAbsolute(dir) ? dir : `./${dir}`;
+    console.log(`\nActivate it in glyphrig.config.yaml:\n\n  theme:\n    use: ${rel}\n`);
+    console.log(`Or preview immediately:\n  npx --yes @glyphrig/cli@0 dev --theme ${rel}`);
+  });
+
+themeCmd
+  .command('eject [dir]')
+  .description('Copy the full default Astro theme into your repository for complete template control')
+  .option('--name <name>', 'Theme display name')
+  .option('--force', 'Overwrite existing files in target directory')
+  .action(async (dir = 'theme', opts) => {
+    const res = await ejectDefaultTheme({
+      targetDir: path.resolve(process.cwd(), dir),
+      name: opts.name,
+      force: Boolean(opts.force),
+    });
+    console.log(`Ejected default Glyphrig Astro theme into ${res.targetDir}`);
+    console.log(`  + ${res.created.length} file(s) written${res.skipped.length ? `, ${res.skipped.length} skipped` : ''}`);
+    const rel = dir.startsWith('.') || path.isAbsolute(dir) ? dir : `./${dir}`;
+    console.log(`\nActivate it in glyphrig.config.yaml:\n\n  theme:\n    use: ${rel}\n`);
+    console.log(`Or preview immediately:\n  npx --yes @glyphrig/cli@0 dev --theme ${rel}`);
   });
 
 program

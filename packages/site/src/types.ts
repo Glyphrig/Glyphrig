@@ -1,5 +1,8 @@
 import type { BookmarkEntry, ForgeKind } from '@glyphrig/core';
 
+export type ColorSchemePreference = 'system' | 'light' | 'dark';
+export type ThemeMode = 'extend' | 'replace' | 'astro';
+
 export interface SiteConfig {
   site: {
     title: string;
@@ -9,9 +12,13 @@ export interface SiteConfig {
     base: string;
   };
   theme: {
+    use?: string;
     accent: string;
+    accentExplicit?: boolean;
     defaultView: 'list' | 'cards';
+    colorScheme: ColorSchemePreference;
     customCss?: string;
+    customHead?: string;
   };
   enrichment: {
     enabled: boolean;
@@ -83,7 +90,12 @@ export interface GlyphrigSiteData {
   allBookmarks: EnrichedBookmark[];
   tags: TagSummary[];
   contributors: ContributorSummary[];
+  themeName: string;
+  themeCssContent?: string;
+  themeHeadContent?: string;
   customCssContent?: string;
+  customHeadContent?: string;
+  replaceBaseCss?: boolean;
   hasCustomFaviconAsset: boolean;
   generatedAt: string;
 }

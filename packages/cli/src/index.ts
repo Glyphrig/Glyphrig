@@ -3,4 +3,5 @@ export * from './enrich.js';
 export * from './init.js';
 export * from './loader.js';
 export * from './sw-generator.js';
+export * from './theme.js';
 export * from './astro-runner.js';

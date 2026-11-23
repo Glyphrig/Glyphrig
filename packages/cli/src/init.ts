@@ -60,6 +60,7 @@ on:
       - "bookmarks/**"
       - "glyphrig.config.yaml"
       - "assets/**"
+      - "theme/**"
       - ".github/workflows/deploy.yml"
   schedule:
     # Weekly keep-warm run to preserve enrichment cache & refresh stale metadata
