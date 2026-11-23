@@ -227,18 +227,15 @@ export async function buildSite(options: BuildSiteOptions = {}): Promise<BuildSi
 
   const plugin = createVirtualDataPlugin(siteData);
 
-  // Astro places `.prerender/` inside `process.cwd()/.astro/` whenever `outDir` is outside
-  // `process.cwd()`, which causes EXDEV on `fs.rename` across mount points (e.g. `/tmp`).
-  // Stage inside `process.cwd()` when `outDir` is external, then copy to `outDir`.
-  const resolvedProcCwd = path.resolve(process.cwd());
-  const outWithinProcCwd =
-    outDir === resolvedProcCwd || outDir.startsWith(resolvedProcCwd + path.sep);
-  const astroOutDir = outWithinProcCwd
-    ? outDir
-    : path.join(
-        resolvedProcCwd,
-        `.glyphrig-stage-${process.pid}-${crypto.randomBytes(4).toString('hex')}`,
-      );
+  // Astro writes `.prerender/prerender-entry.*.mjs` inside `astroOutDir` and imports it
+  // with Node's ESM resolver, which walks up from `astroOutDir` for `node_modules` (e.g.
+  // `piccolore`). Staging inside the CLI package root ensures `node_modules` is always
+  // an ancestor even when `npx @glyphrig/cli build` runs in a data-only repo.
+  const cliPkgRoot = path.resolve(import.meta.dirname, '..');
+  const astroOutDir = path.join(
+    cliPkgRoot,
+    `.glyphrig-stage-${process.pid}-${crypto.randomBytes(4).toString('hex')}`,
+  );
 
   try {
     await astroBuild(
@@ -259,13 +256,9 @@ export async function buildSite(options: BuildSiteOptions = {}): Promise<BuildSi
       { sync: false } as never,
     );
 
-    if (!outWithinProcCwd) {
-      await copyDirRecursive(astroOutDir, outDir);
-    }
+    await copyDirRecursive(astroOutDir, outDir);
   } finally {
-    if (!outWithinProcCwd) {
-      await fs.rm(astroOutDir, { recursive: true, force: true });
-    }
+    await fs.rm(astroOutDir, { recursive: true, force: true });
   }
 
   // Copy referenced downloaded favicons into dist/favicons/
