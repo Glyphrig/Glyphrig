@@ -61,6 +61,7 @@ export type ExtensionMessage =
   | { type: 'DELETE_PROFILE'; profileId: string }
   | { type: 'RUN_DRY_RUN'; profileId: string }
   | { type: 'RUN_SYNC'; profileId: string; trigger?: 'manual' }
+  | { type: 'RUN_SYNC_ALL' }
   | {
       type: 'TEST_CONNECTION';
       config: {

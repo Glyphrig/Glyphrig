@@ -502,9 +502,30 @@ tokenInput.addEventListener('input', clearVerifiedUsername);
 document.getElementById('btn-new-profile')?.addEventListener('click', () => {
   loadProfileIntoForm(null);
   renderState();
+  nameInput.focus();
+  nameInput.select();
+  feedbackEl.textContent = 'Creating a new profile — fill in the fields, select a folder, and click Save Profile.';
 });
 
 const backupStatusEl = document.getElementById('backup-status')!;
+
+document.getElementById('btn-sync-all-profiles')?.addEventListener('click', async () => {
+  backupStatusEl.textContent = 'Syncing all enabled profiles…';
+  try {
+    const res = await sendRpc<{
+      synced: number;
+      failed: Array<{ profileId: string; name: string; error: string }>;
+    }>({ type: 'RUN_SYNC_ALL' });
+    state = await sendRpc<ExtensionStatePayload>({ type: 'GET_STATE' });
+    renderState();
+    backupStatusEl.textContent =
+      res.failed.length > 0
+        ? `Synced ${res.synced}; ${res.failed.length} failed (${res.failed.map((f) => `${f.name}: ${f.error}`).join('; ')}).`
+        : `Synced all ${res.synced} enabled profile(s).`;
+  } catch (err) {
+    backupStatusEl.textContent = err instanceof Error ? err.message : 'Sync all failed.';
+  }
+});
 const importConfigInput = document.getElementById('input-import-config') as HTMLInputElement;
 
 document.getElementById('btn-export-config')?.addEventListener('click', () => {

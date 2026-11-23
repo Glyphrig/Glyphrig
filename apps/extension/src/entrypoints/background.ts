@@ -163,6 +163,25 @@ async function handleMessage(msg: ExtensionMessage): Promise<unknown> {
     case 'RUN_SYNC':
       return runProfileSync(msg.profileId, msg.trigger ?? 'manual');
 
+    case 'RUN_SYNC_ALL': {
+      const profiles = (await getProfiles()).filter((p) => p.enabled);
+      let synced = 0;
+      const failed: Array<{ profileId: string; name: string; error: string }> = [];
+      for (const p of profiles) {
+        try {
+          await runProfileSync(p.id, 'manual');
+          synced++;
+        } catch (err) {
+          failed.push({
+            profileId: p.id,
+            name: p.name,
+            error: err instanceof Error ? err.message : String(err),
+          });
+        }
+      }
+      return { synced, failed };
+    }
+
     case 'TEST_CONNECTION': {
       const adapter = createForgeAdapter({
         forge: msg.config.forge,

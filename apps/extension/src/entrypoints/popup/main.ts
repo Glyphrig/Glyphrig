@@ -24,6 +24,7 @@ const folderLabel = document.getElementById('folder-label')!;
 const lastSyncLabel = document.getElementById('last-sync-label')!;
 const previewNotice = document.getElementById('preview-notice')!;
 const syncBtn = document.getElementById('btn-sync-now') as HTMLButtonElement;
+const syncAllBtn = document.getElementById('btn-sync-all') as HTMLButtonElement;
 const siteLink = document.getElementById('link-site') as HTMLAnchorElement;
 const feedbackEl = document.getElementById('popup-feedback')!;
 
@@ -74,6 +75,7 @@ function render(state: ExtensionStatePayload): void {
 
   previewNotice.hidden = !needsPreview;
   syncBtn.textContent = needsPreview ? 'Preview First Sync in Settings' : 'Sync Now';
+  syncAllBtn.hidden = state.profiles.filter((p) => p.enabled).length <= 1;
 
   statusBadge.className = 'badge';
   if (dirty > 0) {
@@ -142,6 +144,28 @@ syncBtn.addEventListener('click', async () => {
   } catch (err) {
     feedbackEl.textContent = err instanceof Error ? err.message : 'Sync failed.';
   } finally {
+    syncBtn.disabled = false;
+  }
+});
+
+syncAllBtn.addEventListener('click', async () => {
+  syncAllBtn.disabled = true;
+  syncBtn.disabled = true;
+  feedbackEl.textContent = 'Syncing all enabled profiles…';
+  try {
+    const res = await sendRpc<{
+      synced: number;
+      failed: Array<{ profileId: string; name: string; error: string }>;
+    }>({ type: 'RUN_SYNC_ALL' });
+    feedbackEl.textContent =
+      res.failed.length > 0
+        ? `Synced ${res.synced}; ${res.failed.length} failed (${res.failed.map((f) => f.name).join(', ')}).`
+        : `Synced all ${res.synced} profile(s).`;
+    render(await sendRpc<ExtensionStatePayload>({ type: 'GET_STATE' }));
+  } catch (err) {
+    feedbackEl.textContent = err instanceof Error ? err.message : 'Sync all failed.';
+  } finally {
+    syncAllBtn.disabled = false;
     syncBtn.disabled = false;
   }
 });
