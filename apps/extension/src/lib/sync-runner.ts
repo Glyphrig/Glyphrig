@@ -1,7 +1,9 @@
 import {
+  ForgeError,
   SyncEngine,
   createForgeAdapter,
   generateId,
+  refreshGitHubDeviceToken,
   type ProfileConfig,
   type SyncResult,
 } from '@glyphrig/core';
@@ -12,6 +14,7 @@ import {
   appendConflicts,
   appendHistory,
   clearDirtyProfile,
+  getEffectiveGithubOAuthClientId,
   getProfiles,
   getSnapshots,
   saveProfiles,
@@ -20,10 +23,114 @@ import {
 
 const DEBOUNCE_ALARM_PREFIX = 'glyphrig-debounce:';
 const PULL_ALARM_PREFIX = 'glyphrig-pull:';
+const TOKEN_EXPIRY_BUFFER_MS = 5 * 60 * 1000;
 
 const activeLocks = new Map<string, Promise<unknown>>();
+const refreshInFlight = new Map<string, Promise<ProfileConfig>>();
 const echoDepth = new Map<string, number>();
 const echoSuppressUntil = new Map<string, number>();
+
+export async function ensureFreshGitHubProfile(
+  profile: ProfileConfig,
+  forceRefresh = false,
+): Promise<ProfileConfig> {
+  if (profile.forge !== 'github' || !profile.refreshToken) {
+    return profile;
+  }
+
+  const expiresMs = profile.tokenExpiresAt ? Date.parse(profile.tokenExpiresAt) : NaN;
+  const isExpired = Number.isFinite(expiresMs) && expiresMs <= Date.now();
+  const needsRefresh =
+    forceRefresh || (Number.isFinite(expiresMs) && expiresMs - Date.now() <= TOKEN_EXPIRY_BUFFER_MS);
+
+  if (!needsRefresh) {
+    return profile;
+  }
+
+  const clientId =
+    profile.oauthClientId?.trim() || (await getEffectiveGithubOAuthClientId());
+  if (!clientId) {
+    return profile;
+  }
+
+  const oldRefreshToken = profile.refreshToken;
+  const inflight = refreshInFlight.get(oldRefreshToken);
+  if (inflight) {
+    return inflight;
+  }
+
+  const task = (async (): Promise<ProfileConfig> => {
+    const res = await refreshGitHubDeviceToken(
+      clientId,
+      oldRefreshToken,
+      profile.instanceUrl?.trim() || 'https://github.com',
+    );
+
+    if (res.status === 'refreshed') {
+      const nextRefreshToken = res.refreshToken || oldRefreshToken;
+      const tokenExpiresAt = res.expiresIn
+        ? new Date(Date.now() + res.expiresIn * 1000).toISOString()
+        : undefined;
+      const refreshTokenExpiresAt = res.refreshTokenExpiresIn
+        ? new Date(Date.now() + res.refreshTokenExpiresIn * 1000).toISOString()
+        : profile.refreshTokenExpiresAt;
+
+      const profiles = await getProfiles();
+      let updatedSelf: ProfileConfig | null = null;
+      const nextProfiles = profiles.map((p) => {
+        if (p.id !== profile.id && p.refreshToken !== oldRefreshToken) {
+          return p;
+        }
+        const updated: ProfileConfig = {
+          ...p,
+          token: res.accessToken,
+          refreshToken: nextRefreshToken,
+          oauthClientId: clientId,
+        };
+        if (tokenExpiresAt) {
+          updated.tokenExpiresAt = tokenExpiresAt;
+        } else {
+          delete updated.tokenExpiresAt;
+        }
+        if (refreshTokenExpiresAt) {
+          updated.refreshTokenExpiresAt = refreshTokenExpiresAt;
+        }
+        if (p.id === profile.id) {
+          updatedSelf = updated;
+        }
+        return updated;
+      });
+
+      await saveProfiles(nextProfiles);
+      return (
+        updatedSelf ?? {
+          ...profile,
+          token: res.accessToken,
+          refreshToken: nextRefreshToken,
+          oauthClientId: clientId,
+          ...(tokenExpiresAt ? { tokenExpiresAt } : {}),
+          ...(refreshTokenExpiresAt ? { refreshTokenExpiresAt } : {}),
+        }
+      );
+    }
+
+    if (forceRefresh || isExpired) {
+      throw new Error(
+        `GitHub authorization expired (${res.message}). Open Glyphrig Settings and sign in with GitHub again.`,
+      );
+    }
+    return profile;
+  })();
+
+  refreshInFlight.set(oldRefreshToken, task);
+  try {
+    return await task;
+  } finally {
+    if (refreshInFlight.get(oldRefreshToken) === task) {
+      refreshInFlight.delete(oldRefreshToken);
+    }
+  }
+}
 
 export function isEchoSuppressed(profileId: string): boolean {
   if ((echoDepth.get(profileId) ?? 0) > 0) return true;
@@ -170,65 +277,94 @@ async function executeSync(
     throw new Error('Profile is missing repository credentials or bookmark folder.');
   }
 
-  const adapter = createForgeAdapter({
-    forge: profile.forge,
-    instanceUrl: profile.instanceUrl,
-    owner: profile.owner,
-    repo: profile.repo,
-    token: profile.token,
-  });
+  let activeProfile = await ensureFreshGitHubProfile(profile, false);
+  const snapshots = await getSnapshots();
+  const snapshot = snapshots[activeProfile.id] ?? null;
+  const localTree = await readBrowserSubtree(activeProfile.rootFolderId);
 
-  let currentUser = profile.username?.trim() || undefined;
-  if (!currentUser) {
-    try {
-      const authUser = await adapter.getAuthenticatedUser();
-      const fetched = authUser?.username?.trim();
-      if (fetched) {
-        currentUser = fetched;
-        const profiles = await getProfiles();
-        const idx = profiles.findIndex((p) => p.id === profile.id);
-        if (idx >= 0) {
-          const updated = [...profiles];
-          updated[idx] = { ...updated[idx]!, username: fetched };
-          await saveProfiles(updated);
+  const runSyncAttempt = async (targetProfile: ProfileConfig): Promise<SyncResult> => {
+    const adapter = createForgeAdapter({
+      forge: targetProfile.forge,
+      instanceUrl: targetProfile.instanceUrl,
+      owner: targetProfile.owner,
+      repo: targetProfile.repo,
+      token: targetProfile.token,
+    });
+
+    let currentUser = targetProfile.username?.trim() || undefined;
+    if (!currentUser) {
+      try {
+        const authUser = await adapter.getAuthenticatedUser();
+        const fetched = authUser?.username?.trim();
+        if (fetched) {
+          currentUser = fetched;
+          const profiles = await getProfiles();
+          const idx = profiles.findIndex((p) => p.id === targetProfile.id);
+          if (idx >= 0) {
+            const updated = [...profiles];
+            updated[idx] = { ...updated[idx]!, username: fetched };
+            await saveProfiles(updated);
+          }
         }
+      } catch {
+        // Best-effort lookup; proceed with sync even if user endpoint is unavailable
       }
-    } catch {
-      // Best-effort lookup; proceed with sync even if user endpoint is unavailable
+    }
+
+    const engine = new SyncEngine();
+    return engine.sync({
+      adapter,
+      branch: targetProfile.branch || 'main',
+      rootDir: targetProfile.rootDir || 'bookmarks',
+      localTree,
+      snapshot,
+      syncMode: targetProfile.syncMode ?? 'two-way',
+      currentUser,
+      safety: targetProfile.safety,
+      dryRun,
+    });
+  };
+
+  let result: SyncResult;
+  try {
+    result = await runSyncAttempt(activeProfile);
+  } catch (err) {
+    if (
+      err instanceof ForgeError &&
+      err.code === 'auth' &&
+      activeProfile.forge === 'github' &&
+      activeProfile.refreshToken
+    ) {
+      activeProfile = await ensureFreshGitHubProfile(activeProfile, true);
+      result = await runSyncAttempt(activeProfile);
+    } else if (
+      err instanceof ForgeError &&
+      err.code === 'auth' &&
+      activeProfile.forge === 'github' &&
+      activeProfile.authMethod === 'device-flow'
+    ) {
+      throw new Error(
+        `GitHub authentication failed (${err.message}). Your token may have expired or been revoked — open Glyphrig Settings and click "Sign in with GitHub" to reconnect.`,
+      );
+    } else {
+      throw err;
     }
   }
-
-  const snapshots = await getSnapshots();
-  const snapshot = snapshots[profile.id] ?? null;
-  const localTree = await readBrowserSubtree(profile.rootFolderId);
-
-  const engine = new SyncEngine();
-  const result = await engine.sync({
-    adapter,
-    branch: profile.branch || 'main',
-    rootDir: profile.rootDir || 'bookmarks',
-    localTree,
-    snapshot,
-    syncMode: profile.syncMode ?? 'two-way',
-    currentUser,
-    safety: profile.safety,
-    dryRun,
-  });
 
   if (dryRun) {
     return result;
   }
 
   if (result.localPatchNeeded) {
-    await applyTreeToBrowser(profile.rootFolderId, result.browserTargetTree, {
-      onStart: () => beginEchoSuppression(profile.id),
-      onEnd: () => endEchoSuppression(profile.id),
+    await applyTreeToBrowser(activeProfile.rootFolderId, result.browserTargetTree, {
+      onStart: () => beginEchoSuppression(activeProfile.id),
+      onEnd: () => endEchoSuppression(activeProfile.id),
     });
   }
 
   // Persist snapshot of sanitized local+remote merged tree
-  await saveSnapshot(profile.id, result.snapshot);
-  await clearDirtyProfile(profile.id);
+  await saveSnapshot(activeProfile.id, result.snapshot);
+  await clearDirtyProfile(activeProfile.id);
 
   if (result.conflicts.length > 0) {
     await appendConflicts(result.conflicts);
@@ -240,8 +376,8 @@ async function executeSync(
   await appendHistory({
     id: generateId(),
     timestamp: new Date().toISOString(),
-    profileId: profile.id,
-    profileName: profile.name,
+    profileId: activeProfile.id,
+    profileName: activeProfile.name,
     trigger,
     status,
     commitSha: result.commitSha,

@@ -125,18 +125,23 @@
                   </button>
                 </div>
                 <div id="device-pending" class="device-pending" hidden>
-                  <p>
-                    Enter code <code id="device-user-code" class="code-pill">----</code> at
-                    <a id="device-verify-link" target="_blank" rel="noopener noreferrer">
-                      github.com/login/device
-                    </a>
-                  </p>
-                  <div class="row-gap">
-                    <button type="button" class="btn-secondary btn-sm" id="btn-copy-code">
-                      Copy Code
-                    </button>
-                    <span id="device-poll-status" class="muted small">Waiting for authorization…</span>
+                  <div class="row-between">
+                    <p>
+                      Code <code id="device-user-code" class="code-pill">----</code> for
+                      <a id="device-verify-link" target="_blank" rel="noopener noreferrer">
+                        github.com/login/device
+                      </a>
+                    </p>
+                    <div class="row-gap">
+                      <button type="button" class="btn-secondary btn-sm" id="btn-copy-code">
+                        Copy Code
+                      </button>
+                      <button type="button" class="btn-secondary btn-sm" id="btn-open-device-modal">
+                        Show Popup
+                      </button>
+                    </div>
                   </div>
+                  <span id="device-poll-status" class="muted small">Waiting for authorization…</span>
                 </div>
               </div>
 
@@ -275,6 +280,46 @@
         </div>
       </section>
     </div>
+
+    <!-- GITHUB DEVICE FLOW POP-OUT MODAL -->
+    <dialog id="device-flow-modal" class="modal modal-device" aria-labelledby="device-modal-title">
+      <div class="modal-head">
+        <h2 id="device-modal-title">Sign in with GitHub</h2>
+        <button type="button" class="btn-secondary btn-sm" id="btn-close-device-modal">Close</button>
+      </div>
+      <div class="modal-body device-modal-body">
+        <div class="device-step">
+          <div class="device-step-label">Step 1 &mdash; Copy your one-time verification code</div>
+          <div class="code-row">
+            <code id="device-modal-code" class="code-display">----</code>
+            <button type="button" class="btn-secondary" id="btn-modal-copy-code">Copy Code</button>
+          </div>
+          <p id="device-copy-feedback" class="small muted" aria-live="polite"></p>
+        </div>
+
+        <div class="device-step">
+          <div class="device-step-label">Step 2 &mdash; Authorize Glyphrig on GitHub</div>
+          <a
+            id="device-modal-open-link"
+            class="btn-primary btn-block"
+            href="https://github.com/login/device"
+            target="_blank"
+            rel="noopener noreferrer"
+          >
+            Open GitHub Authorization Page &#8599;
+          </a>
+          <p id="device-modal-url" class="small muted device-url-caption"></p>
+        </div>
+
+        <div id="device-modal-status" class="status-banner is-info" aria-live="polite">
+          Waiting for authorization on GitHub…
+        </div>
+      </div>
+      <div class="modal-foot">
+        <button type="button" class="btn-secondary" id="btn-cancel-device-modal">Cancel</button>
+        <button type="button" class="btn-primary" id="btn-done-device-modal" hidden>Done</button>
+      </div>
+    </dialog>
 
     <!-- DRY-RUN PREVIEW MODAL -->
     <dialog id="dry-run-modal" class="modal">

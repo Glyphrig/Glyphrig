@@ -28,7 +28,7 @@ Two-way sync a chosen bookmark folder with a Git repository (GitHub, GitLab, For
 ### Detailed Description (plain-text formatted for CWS)
 
 ```text
-Glyphrig turns a single chosen browser bookmark folder into a two-way Git-backed knowledge archive—and optionally publishes it as a searchable static bookmark site ("Editorial Digital Garden").
+Glyphrig turns a single chosen browser bookmark folder into a two-way Git-backed knowledge archive—and optionally lets you publish it as a searchable static bookmark site.
 
 Instead of locking your bookmarks inside one browser or uploading your entire private bookmark bar to a third-party cloud, Glyphrig syncs only the specific folder(s) you choose directly to your own Git repository as clean, human-editable Markdown.
 
@@ -38,10 +38,10 @@ KEY FEATURES
 Pick one specific bookmark folder per profile. Glyphrig never touches, reads, or syncs the rest of your bookmarks.
 
 • True Two-Way 3-Way Merge (Plus Contribute-Only Mode)
-Keep a bookmark folder mirrored across Chrome, Firefox Desktop, and Firefox for Android with non-destructive conflict resolution—or choose Contribute-only mode to push your bookmarks to a shared repo without pulling others into your browser.
+Keep a bookmark folder mirrored across your browsers and devices with non-destructive conflict resolution—or choose Contribute-only mode to push your bookmarks to a shared repository without pulling others into your browser.
 
 • Multi-Forge Git Support
-Connect directly to GitHub (via one-click GitHub OAuth Device Flow or Personal Access Token), GitLab, or Forgejo / Codeberg / Gitea—including self-hosted instances.
+Connect directly to GitHub (via OAuth Device Flow or a Personal Access Token), GitLab, or compatible self-hosted Git servers such as Forgejo and Gitea.
 
 • Human-Editable Markdown-per-Folder
 Maps each synced subfolder to bookmarks/<folder>/README.md while preserving YAML frontmatter, intro prose, notes, and #tags on every round-trip.
@@ -54,13 +54,13 @@ Automatically protects you from accidental leaks before pushing to Git:
   - Requires a Dry-Run Preview before committing the initial sync of any profile
 
 • Multi-Profile & Backups
-Configure multiple independent profiles (different bookmark folders to different repos), customize push debounce and periodic pull intervals, inspect sync & conflict logs, and export/import JSON config backups.
+Configure multiple independent profiles (different bookmark folders to different repositories), customize push debounce and periodic pull intervals, inspect sync and conflict logs, and export/import JSON configuration backups.
 
 • Optional Static Bookmark Site
-Pair your bookmark repo with @glyphrig/cli (npx @glyphrig/cli init) to auto-build an Editorial Digital Garden site with Pagefind search, RSS/JSON feeds, local favicons, and an installable PWA Quick Add / Share Target on GitHub Pages, GitLab Pages, Codeberg, Cloudflare Pages, Netlify, or Vercel.
+Pair your synced bookmark repository with the optional @glyphrig/cli site generator to build a searchable static bookmark directory with RSS/JSON feeds and local favicons for any static web host.
 
 • Local-First & Open Source
-MIT licensed, zero telemetry, zero ads, and no intermediary backend—your browser communicates directly with your chosen Git forge.
+MIT licensed, zero telemetry, zero ads, and no intermediary backend—your browser communicates directly with your configured Git server.
 
 QUICK SETUP
 
@@ -147,7 +147,7 @@ Raw Markdown mirror: `https://glyphrig.github.io/Glyphrig/PRIVACY.md` (or `https
 
 | CWS Dashboard Slot | Required Spec | Ready File | Verified Output |
 | :--- | :--- | :--- | :--- |
-| **Extension Package** | Manifest V3 `.zip` | `apps/extension/.output/glyphrigextension-0.4.1-chrome.zip` | Built via `pnpm --filter @glyphrig/extension zip` |
+| **Extension Package** | Manifest V3 `.zip` | `apps/extension/.output/glyphrigextension-0.4.3-chrome.zip` | Built via `pnpm --filter @glyphrig/extension zip` |
 | **Store Icon** | `128×128` PNG (RGBA, padded) | `docs/chrome-web-store/assets/store-icon-128x128.png` | `128×128` RGBA (`TrueColorAlpha`, 12px padding) |
 | **Small Promo Tile** | `440×280` PNG/JPEG (no alpha) | `docs/chrome-web-store/assets/promo-small-440x280.png` | `440×280` RGB (`TrueColor`, PNG24) |
 | **Marquee Promo Tile** | `1400×560` PNG/JPEG (no alpha) | `docs/chrome-web-store/assets/promo-marquee-1400x560.png` | `1400×560` RGB (`TrueColor`, PNG24) |

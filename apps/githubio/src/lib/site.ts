@@ -18,6 +18,10 @@ export const SITE_URL = (
 export const REPO_URL = 'https://github.com/Glyphrig/Glyphrig';
 export const RELEASES_URL = 'https://github.com/Glyphrig/Glyphrig/releases';
 export const ISSUES_URL = 'https://github.com/Glyphrig/Glyphrig/issues';
+export const CHROME_WEB_STORE_URL =
+  'https://chromewebstore.google.com/detail/glyphrig/ennpigbnodfiobgblonmckfeonnagjeg';
+export const SPONSOR_URL = 'https://tekromancy.com/';
+export const SPONSOR_NAME = 'Tekromancy';
 
 export interface DocEntry {
   slug: string;

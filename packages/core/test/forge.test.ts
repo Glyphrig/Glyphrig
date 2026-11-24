@@ -3,6 +3,7 @@ import {
   createForgeAdapter,
   encodeUtf8ToBase64,
   pollGitHubDeviceToken,
+  refreshGitHubDeviceToken,
   requestGitHubDeviceCode,
 } from '../src/index.js';
 
@@ -120,6 +121,97 @@ describe('Forge adapters', () => {
     expect(secondPoll).toMatchObject({
       status: 'authorized',
       accessToken: 'gho_secret_token',
+    });
+  });
+
+  it('captures expiring token metadata and refreshes rotating GitHub refresh tokens', async () => {
+    const refreshCalls: string[] = [];
+    const mockFetch: typeof fetch = async (_input, init) => {
+      const bodyStr = String(init?.body ?? '');
+      refreshCalls.push(bodyStr);
+      const params = new URLSearchParams(bodyStr);
+
+      if (params.get('grant_type') === 'urn:ietf:params:oauth:grant-type:device_code') {
+        return jsonResponse({
+          access_token: 'ghu_initial_token',
+          token_type: 'bearer',
+          scope: 'repo',
+          expires_in: 28800,
+          refresh_token: 'ghr_refresh_1',
+          refresh_token_expires_in: 15897600,
+        });
+      }
+
+      if (params.get('grant_type') === 'refresh_token') {
+        if (params.get('refresh_token') === 'ghr_expired') {
+          return jsonResponse({
+            error: 'bad_refresh_token',
+            error_description: 'The refresh token passed is incorrect or expired.',
+          });
+        }
+        return jsonResponse({
+          access_token: 'ghu_rotated_token',
+          token_type: 'bearer',
+          scope: '',
+          expires_in: 28800,
+          refresh_token: 'ghr_refresh_2',
+          refresh_token_expires_in: 15897600,
+        });
+      }
+
+      return jsonResponse({ error: 'unexpected' }, 500);
+    };
+
+    const pollRes = await pollGitHubDeviceToken('Ov23liTest', 'dev-1', 'https://github.com', mockFetch);
+    expect(pollRes).toEqual({
+      status: 'authorized',
+      accessToken: 'ghu_initial_token',
+      tokenType: 'bearer',
+      scope: 'repo',
+      expiresIn: 28800,
+      refreshToken: 'ghr_refresh_1',
+      refreshTokenExpiresIn: 15897600,
+    });
+
+    const refreshed = await refreshGitHubDeviceToken(
+      'Ov23liTest',
+      'ghr_refresh_1',
+      'https://github.com',
+      mockFetch,
+    );
+    expect(refreshed).toEqual({
+      status: 'refreshed',
+      accessToken: 'ghu_rotated_token',
+      tokenType: 'bearer',
+      scope: '',
+      expiresIn: 28800,
+      refreshToken: 'ghr_refresh_2',
+      refreshTokenExpiresIn: 15897600,
+    });
+    expect(refreshCalls[1]).toContain('grant_type=refresh_token');
+    expect(refreshCalls[1]).toContain('client_id=Ov23liTest');
+
+    const badRefresh = await refreshGitHubDeviceToken(
+      'Ov23liTest',
+      'ghr_expired',
+      'https://github.com',
+      mockFetch,
+    );
+    expect(badRefresh).toEqual({
+      status: 'error',
+      errorCode: 'bad_refresh_token',
+      message: 'The refresh token passed is incorrect or expired.',
+    });
+
+    const httpFail = await refreshGitHubDeviceToken(
+      'Ov23liTest',
+      'ghr_refresh_1',
+      'https://github.com',
+      async () => new Response('Server Error', { status: 500 }),
+    );
+    expect(httpFail).toEqual({
+      status: 'error',
+      message: 'GitHub token refresh failed (500)',
     });
   });
 

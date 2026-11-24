@@ -1,5 +1,5 @@
 import Link from 'next/link';
-import { REPO_URL, withBasePath } from '@/lib/site';
+import { CHROME_WEB_STORE_URL, REPO_URL, withBasePath } from '@/lib/site';
 import { ThemeToggle } from './ThemeToggle';
 
 export function SiteHeader() {
@@ -27,6 +27,9 @@ export function SiteHeader() {
           <Link href="/privacy/" className="nav-link">
             Privacy
           </Link>
+          <a href={CHROME_WEB_STORE_URL} target="_blank" rel="noopener noreferrer" className="nav-link">
+            Chrome Web Store
+          </a>
           <a href={REPO_URL} target="_blank" rel="noopener noreferrer" className="nav-link">
             GitHub
           </a>

@@ -65,6 +65,7 @@ export type ExtensionMessage =
   | {
       type: 'TEST_CONNECTION';
       config: {
+        profileId?: string;
         forge: ForgeKind;
         instanceUrl?: string;
         owner: string;

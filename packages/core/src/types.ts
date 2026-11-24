@@ -95,6 +95,10 @@ export interface ProfileConfig {
   rootDir: string;
   token: string;
   authMethod?: 'pat' | 'device-flow';
+  refreshToken?: string;
+  tokenExpiresAt?: string;
+  refreshTokenExpiresAt?: string;
+  oauthClientId?: string;
   username?: string;
   syncMode?: SyncMode;
   rootFolderId: string;

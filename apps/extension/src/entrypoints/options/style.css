@@ -398,3 +398,93 @@ dialog.modal::backdrop {
   padding-left: 18px;
   font-size: 0.88rem;
 }
+
+dialog.modal-device {
+  width: min(460px, calc(100vw - 24px));
+}
+
+.device-modal-body {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.device-step {
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.device-step-label {
+  font-size: 0.85rem;
+  font-weight: 700;
+  color: var(--ink);
+}
+
+.code-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.code-display {
+  flex: 1;
+  min-width: 170px;
+  text-align: center;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 1.55rem;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  padding: 10px 14px;
+  border-radius: 8px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  color: var(--ink);
+  user-select: all;
+}
+
+.btn-block {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  text-decoration: none;
+  text-align: center;
+}
+
+.device-url-caption {
+  margin: 0;
+  font-family: ui-monospace, monospace;
+  word-break: break-all;
+}
+
+.status-banner {
+  padding: 10px 12px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  font-size: 0.88rem;
+  font-weight: 600;
+}
+
+.status-banner.is-info {
+  background: var(--surface-muted);
+  color: var(--ink);
+}
+
+.status-banner.is-ok {
+  background: color-mix(in srgb, var(--ok) 12%, transparent);
+  border-color: var(--ok);
+  color: var(--ok);
+}
+
+.status-banner.is-err {
+  background: color-mix(in srgb, var(--err) 12%, transparent);
+  border-color: var(--err);
+  color: var(--err);
+}

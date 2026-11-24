@@ -99,6 +99,17 @@ const deviceCodeEl = document.getElementById('device-user-code')!;
 const deviceVerifyLink = document.getElementById('device-verify-link') as HTMLAnchorElement;
 const devicePollStatus = document.getElementById('device-poll-status')!;
 
+const deviceFlowModal = document.getElementById('device-flow-modal') as HTMLDialogElement;
+const deviceModalCodeEl = document.getElementById('device-modal-code')!;
+const deviceCopyFeedbackEl = document.getElementById('device-copy-feedback')!;
+const deviceModalOpenLink = document.getElementById('device-modal-open-link') as HTMLAnchorElement;
+const deviceModalUrlEl = document.getElementById('device-modal-url')!;
+const deviceModalStatusEl = document.getElementById('device-modal-status')!;
+const modalCopyCodeBtn = document.getElementById('btn-modal-copy-code') as HTMLButtonElement;
+const cancelDeviceModalBtn = document.getElementById('btn-cancel-device-modal') as HTMLButtonElement;
+const doneDeviceModalBtn = document.getElementById('btn-done-device-modal') as HTMLButtonElement;
+const inlineCopyCodeBtn = document.getElementById('btn-copy-code') as HTMLButtonElement;
+
 const enabledCheck = document.getElementById('f-enabled') as HTMLInputElement;
 const syncModeSelect = document.getElementById('f-syncmode') as HTMLSelectElement;
 const autoSyncCheck = document.getElementById('f-autosync') as HTMLInputElement;
@@ -126,9 +137,41 @@ let editingProfileId: string | null = null;
 let selectedFolderId = '';
 let selectedFolderTitle = '';
 let authMethod: 'pat' | 'device-flow' = 'pat';
+let oauthRefreshToken: string | undefined;
+let oauthTokenExpiresAt: string | undefined;
+let oauthRefreshTokenExpiresAt: string | undefined;
+let oauthClientId: string | undefined;
 let verifiedUsername = '';
 let pendingPreviewProfileId: string | null = null;
 let activePollTimer: number | undefined;
+
+async function copyTextToClipboard(text: string): Promise<boolean> {
+  if (!text) return false;
+  try {
+    await navigator.clipboard.writeText(text);
+    return true;
+  } catch {
+    try {
+      const textarea = document.createElement('textarea');
+      textarea.value = text;
+      textarea.style.position = 'fixed';
+      textarea.style.opacity = '0';
+      document.body.append(textarea);
+      textarea.focus();
+      textarea.select();
+      const ok = document.execCommand('copy');
+      textarea.remove();
+      return ok;
+    } catch {
+      return false;
+    }
+  }
+}
+
+function setDeviceModalStatus(message: string, tone: 'info' | 'ok' | 'err'): void {
+  deviceModalStatusEl.textContent = message;
+  deviceModalStatusEl.className = `status-banner is-${tone}`;
+}
 
 function renderVerifiedUsername(): void {
   verifiedUsernameEl.textContent = verifiedUsername
@@ -216,6 +259,10 @@ function loadProfileIntoForm(profile: ProfileConfig | null): void {
     siteUrlInput.value = '';
     tokenInput.value = '';
     authMethod = 'pat';
+    oauthRefreshToken = undefined;
+    oauthTokenExpiresAt = undefined;
+    oauthRefreshTokenExpiresAt = undefined;
+    oauthClientId = undefined;
     verifiedUsername = '';
     selectedFolderId = '';
     selectedFolderTitle = '';
@@ -242,6 +289,10 @@ function loadProfileIntoForm(profile: ProfileConfig | null): void {
     siteUrlInput.value = profile.siteUrl ?? '';
     tokenInput.value = profile.token;
     authMethod = profile.authMethod ?? 'pat';
+    oauthRefreshToken = profile.refreshToken;
+    oauthTokenExpiresAt = profile.tokenExpiresAt;
+    oauthRefreshTokenExpiresAt = profile.refreshTokenExpiresAt;
+    oauthClientId = profile.oauthClientId;
     verifiedUsername = profile.username ?? '';
     selectedFolderId = profile.rootFolderId;
     selectedFolderTitle = profile.rootFolderTitle ?? '';
@@ -277,6 +328,12 @@ function buildProfileFromForm(): ProfileConfig {
     rootDir: rootDirInput.value.trim() || 'bookmarks',
     token: tokenInput.value.trim(),
     authMethod,
+    ...(oauthRefreshToken ? { refreshToken: oauthRefreshToken } : {}),
+    ...(oauthTokenExpiresAt ? { tokenExpiresAt: oauthTokenExpiresAt } : {}),
+    ...(oauthRefreshTokenExpiresAt
+      ? { refreshTokenExpiresAt: oauthRefreshTokenExpiresAt }
+      : {}),
+    ...(oauthClientId ? { oauthClientId } : {}),
     ...(verifiedUsername ? { username: verifiedUsername } : {}),
     rootFolderId: selectedFolderId,
     ...(selectedFolderTitle ? { rootFolderTitle: selectedFolderTitle } : {}),
@@ -497,7 +554,14 @@ forgeSelect.addEventListener('change', () => {
   clearVerifiedUsername();
 });
 instanceInput.addEventListener('input', clearVerifiedUsername);
-tokenInput.addEventListener('input', clearVerifiedUsername);
+tokenInput.addEventListener('input', () => {
+  authMethod = 'pat';
+  oauthRefreshToken = undefined;
+  oauthTokenExpiresAt = undefined;
+  oauthRefreshTokenExpiresAt = undefined;
+  oauthClientId = undefined;
+  clearVerifiedUsername();
+});
 
 document.getElementById('btn-new-profile')?.addEventListener('click', () => {
   loadProfileIntoForm(null);
@@ -605,6 +669,7 @@ document.getElementById('btn-test-conn')?.addEventListener('click', async () => 
     }>({
       type: 'TEST_CONNECTION',
       config: {
+        ...(editingProfileId ? { profileId: editingProfileId } : {}),
         forge: forgeSelect.value as ForgeKind,
         instanceUrl: instanceInput.value.trim() || undefined,
         owner: ownerInput.value.trim(),
@@ -626,19 +691,39 @@ document.getElementById('btn-test-conn')?.addEventListener('click', async () => 
 
 deviceLoginBtn.addEventListener('click', async () => {
   stopDevicePoll();
+  deviceLoginBtn.disabled = true;
   devicePollStatus.textContent = 'Requesting device code…';
   try {
     await ensureOriginPermission(instanceInput.value);
+    const instanceHost = instanceInput.value.trim() || undefined;
     const codeRes = await sendRpc<GitHubDeviceCodeResponse>({
       type: 'START_GITHUB_DEVICE_FLOW',
-      instanceUrl: instanceInput.value.trim() || undefined,
+      instanceUrl: instanceHost,
     });
+
     devicePendingBox.hidden = false;
     deviceCodeEl.textContent = codeRes.user_code;
     deviceVerifyLink.href = codeRes.verification_uri;
     deviceVerifyLink.textContent = codeRes.verification_uri;
-    devicePollStatus.textContent = 'Waiting for authorization…';
-    window.open(codeRes.verification_uri, '_blank', 'noopener,noreferrer');
+    devicePollStatus.textContent = 'Waiting for authorization on GitHub…';
+
+    deviceModalCodeEl.textContent = codeRes.user_code;
+    deviceModalOpenLink.href = codeRes.verification_uri;
+    deviceModalUrlEl.textContent = codeRes.verification_uri;
+    cancelDeviceModalBtn.hidden = false;
+    doneDeviceModalBtn.hidden = true;
+    setDeviceModalStatus(
+      `Copy the code above, then open GitHub to authorize (expires in ${Math.max(1, Math.round(codeRes.expires_in / 60))} min).`,
+      'info',
+    );
+    if (!deviceFlowModal.open) {
+      deviceFlowModal.showModal();
+    }
+
+    const copied = await copyTextToClipboard(codeRes.user_code);
+    deviceCopyFeedbackEl.textContent = copied
+      ? '✓ Code copied to clipboard — ready to paste on GitHub.'
+      : 'Click Copy Code above before opening GitHub.';
 
     let intervalMs = Math.max(5, codeRes.interval || 5) * 1000;
     const poll = async (): Promise<void> => {
@@ -646,36 +731,142 @@ deviceLoginBtn.addEventListener('click', async () => {
         const res = await sendRpc<GitHubDeviceTokenPollResult>({
           type: 'POLL_GITHUB_DEVICE_FLOW',
           deviceCode: codeRes.device_code,
-          instanceUrl: instanceInput.value.trim() || undefined,
+          instanceUrl: instanceHost,
         });
         if (res.status === 'authorized') {
           tokenInput.value = res.accessToken;
           authMethod = 'device-flow';
+          oauthRefreshToken = res.refreshToken;
+          oauthTokenExpiresAt = res.expiresIn
+            ? new Date(Date.now() + res.expiresIn * 1000).toISOString()
+            : undefined;
+          oauthRefreshTokenExpiresAt = res.refreshTokenExpiresIn
+            ? new Date(Date.now() + res.refreshTokenExpiresIn * 1000).toISOString()
+            : undefined;
+          oauthClientId = state?.effectiveGithubOAuthClientId || undefined;
           clearVerifiedUsername();
-          devicePollStatus.textContent = 'Authorized! Token populated below (remember to Save Profile).';
+
+          const lifetimeNote = res.refreshToken
+            ? 'Auto-refresh enabled (6-month rolling session).'
+            : res.expiresIn
+              ? `Note: GitHub issued an expiring token (~${Math.max(1, Math.round(res.expiresIn / 3600))}h) without a refresh token.`
+              : 'Non-expiring GitHub OAuth token.';
+
+          let savedNote = 'Finish configuring your repository & folder, then click Save Profile.';
+          if (selectedFolderId && ownerInput.value.trim() && repoInput.value.trim()) {
+            try {
+              const profile = buildProfileFromForm();
+              state = await sendRpc<ExtensionStatePayload>({ type: 'SAVE_PROFILE', profile });
+              editingProfileId = profile.id;
+
+              try {
+                const info = await sendRpc<{ username?: string }>({
+                  type: 'TEST_CONNECTION',
+                  config: {
+                    profileId: profile.id,
+                    forge: profile.forge,
+                    instanceUrl: profile.instanceUrl,
+                    owner: profile.owner,
+                    repo: profile.repo,
+                    branch: profile.branch,
+                    token: profile.token,
+                  },
+                });
+                if (info.username) {
+                  verifiedUsername = info.username;
+                  renderVerifiedUsername();
+                  state = await sendRpc<ExtensionStatePayload>({
+                    type: 'SAVE_PROFILE',
+                    profile: buildProfileFromForm(),
+                  });
+                }
+              } catch {
+                // Best-effort attribution lookup; token is already saved
+              }
+
+              renderState();
+              savedNote = 'Token saved automatically to your profile.';
+            } catch (saveErr) {
+              savedNote =
+                saveErr instanceof Error
+                  ? `Click Save Profile (${saveErr.message}).`
+                  : 'Click Save Profile to persist.';
+            }
+          }
+
+          const successMsg = `✓ Authorized! ${savedNote} ${lifetimeNote}`;
+          devicePollStatus.textContent = successMsg;
+          setDeviceModalStatus(successMsg, 'ok');
+          cancelDeviceModalBtn.hidden = true;
+          doneDeviceModalBtn.hidden = false;
           return;
         }
         if (res.status === 'slow_down') {
           intervalMs = Math.max(intervalMs + 5000, res.interval * 1000);
         } else if (res.status !== 'pending') {
           devicePollStatus.textContent = res.message;
+          setDeviceModalStatus(res.message, 'err');
           return;
         }
         activePollTimer = window.setTimeout(() => void poll(), intervalMs);
       } catch (err) {
-        devicePollStatus.textContent = err instanceof Error ? err.message : 'Polling failed.';
+        const msg = err instanceof Error ? err.message : 'Polling failed.';
+        devicePollStatus.textContent = msg;
+        setDeviceModalStatus(msg, 'err');
       }
     };
     activePollTimer = window.setTimeout(() => void poll(), intervalMs);
   } catch (err) {
+    const msg = err instanceof Error ? err.message : 'Device Flow failed.';
     devicePendingBox.hidden = false;
-    devicePollStatus.textContent = err instanceof Error ? err.message : 'Device Flow failed.';
+    devicePollStatus.textContent = msg;
+    setDeviceModalStatus(msg, 'err');
+  } finally {
+    deviceLoginBtn.disabled = false;
   }
 });
 
-document.getElementById('btn-copy-code')?.addEventListener('click', async () => {
-  const code = deviceCodeEl.textContent || '';
-  if (code) await navigator.clipboard.writeText(code);
+modalCopyCodeBtn?.addEventListener('click', async () => {
+  const code = deviceModalCodeEl.textContent?.trim() || '';
+  if (await copyTextToClipboard(code)) {
+    deviceCopyFeedbackEl.textContent = '✓ Copied to clipboard.';
+    const prev = modalCopyCodeBtn.textContent;
+    modalCopyCodeBtn.textContent = 'Copied!';
+    window.setTimeout(() => {
+      modalCopyCodeBtn.textContent = prev || 'Copy Code';
+    }, 1500);
+  } else {
+    deviceCopyFeedbackEl.textContent = 'Unable to write to clipboard automatically — please copy the code manually.';
+  }
+});
+
+inlineCopyCodeBtn?.addEventListener('click', async () => {
+  const code = deviceCodeEl.textContent?.trim() || '';
+  if (await copyTextToClipboard(code)) {
+    const prev = inlineCopyCodeBtn.textContent;
+    inlineCopyCodeBtn.textContent = 'Copied!';
+    window.setTimeout(() => {
+      inlineCopyCodeBtn.textContent = prev || 'Copy Code';
+    }, 1500);
+  }
+});
+
+document.getElementById('btn-open-device-modal')?.addEventListener('click', () => {
+  if (!deviceFlowModal.open) deviceFlowModal.showModal();
+});
+
+document.getElementById('btn-close-device-modal')?.addEventListener('click', () => {
+  deviceFlowModal.close();
+});
+
+doneDeviceModalBtn?.addEventListener('click', () => {
+  deviceFlowModal.close();
+});
+
+cancelDeviceModalBtn?.addEventListener('click', () => {
+  stopDevicePoll();
+  devicePendingBox.hidden = true;
+  deviceFlowModal.close();
 });
 
 form.addEventListener('submit', async (e) => {

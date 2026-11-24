@@ -1,7 +1,15 @@
 import Link from 'next/link';
 import { CopyCommand } from '@/components/CopyCommand';
 import { ScreenshotShowcase } from '@/components/ScreenshotShowcase';
-import { DOC_ENTRIES, RELEASES_URL, REPO_URL, withBasePath } from '@/lib/site';
+import {
+  CHROME_WEB_STORE_URL,
+  DOC_ENTRIES,
+  RELEASES_URL,
+  REPO_URL,
+  SPONSOR_NAME,
+  SPONSOR_URL,
+  withBasePath,
+} from '@/lib/site';
 
 const FEATURES = [
   {
@@ -74,15 +82,20 @@ export default function HomePage() {
             </p>
 
             <div className="hero-actions">
-              <Link href="/docs/getting-started/" className="btn-primary">
+              <a
+                href={CHROME_WEB_STORE_URL}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="btn-primary"
+              >
+                Install on Chrome Web Store
+              </a>
+              <Link href="/docs/getting-started/" className="btn-secondary">
                 Get Started
               </Link>
               <a href={RELEASES_URL} target="_blank" rel="noopener noreferrer" className="btn-secondary">
-                Download Extension
+                Firefox &amp; Releases
               </a>
-              <Link href="/docs/" className="btn-secondary">
-                Read Docs
-              </Link>
             </div>
 
             <CopyCommand command="npx --yes @glyphrig/cli@0 init glyphrig_bookmarks" />
@@ -102,6 +115,17 @@ export default function HomePage() {
             <p className="hero-crest-caption">
               Zero developer servers, zero telemetry, zero vendor lock-in. Your browser talks
               directly to your Git forge.
+            </p>
+            <p className="hero-crest-caption">
+              Sponsored by{' '}
+              <a
+                href={SPONSOR_URL}
+                target="_blank"
+                rel="noopener noreferrer"
+                style={{ color: 'var(--accent)', fontWeight: 600 }}
+              >
+                {SPONSOR_NAME}
+              </a>
             </p>
           </div>
         </div>
@@ -158,7 +182,16 @@ export default function HomePage() {
               <div className="step-num">02</div>
               <h3>Connect One Browser Folder</h3>
               <p>
-                Open Glyphrig Settings, sign in with GitHub Device Flow or a scoped PAT, choose one
+                Install from the{' '}
+                <a
+                  href={CHROME_WEB_STORE_URL}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  style={{ color: 'var(--accent)', fontWeight: 600 }}
+                >
+                  Chrome Web Store
+                </a>
+                , open Glyphrig Settings, sign in with GitHub Device Flow or a scoped PAT, choose one
                 bookmark folder, and verify the Dry-Run Preview.
               </p>
             </article>

@@ -75,9 +75,29 @@ export interface GitHubDeviceCodeResponse {
 }
 
 export type GitHubDeviceTokenPollResult =
-  | { status: 'authorized'; accessToken: string; tokenType: string; scope: string }
+  | {
+      status: 'authorized';
+      accessToken: string;
+      tokenType: string;
+      scope: string;
+      expiresIn?: number;
+      refreshToken?: string;
+      refreshTokenExpiresIn?: number;
+    }
   | { status: 'pending'; interval?: number }
   | { status: 'slow_down'; interval: number }
   | { status: 'expired'; message: string }
   | { status: 'access_denied'; message: string }
   | { status: 'error'; message: string };
+
+export type GitHubTokenRefreshResult =
+  | {
+      status: 'refreshed';
+      accessToken: string;
+      tokenType: string;
+      scope: string;
+      expiresIn?: number;
+      refreshToken?: string;
+      refreshTokenExpiresIn?: number;
+    }
+  | { status: 'error'; errorCode?: string; message: string };

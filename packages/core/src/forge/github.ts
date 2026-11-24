@@ -14,6 +14,7 @@ import {
   type ForgeAdapterConfig,
   type GitHubDeviceCodeResponse,
   type GitHubDeviceTokenPollResult,
+  type GitHubTokenRefreshResult,
   type ReadBookmarkFilesResult,
   type RepoConnectionInfo,
 } from './types.js';
@@ -413,6 +414,9 @@ export async function pollGitHubDeviceToken(
     access_token?: string;
     token_type?: string;
     scope?: string;
+    expires_in?: number;
+    refresh_token?: string;
+    refresh_token_expires_in?: number;
     error?: string;
     error_description?: string;
     interval?: number;
@@ -424,6 +428,13 @@ export async function pollGitHubDeviceToken(
       accessToken: data.access_token,
       tokenType: data.token_type ?? 'bearer',
       scope: data.scope ?? '',
+      ...(typeof data.expires_in === 'number' && data.expires_in > 0
+        ? { expiresIn: data.expires_in }
+        : {}),
+      ...(data.refresh_token ? { refreshToken: data.refresh_token } : {}),
+      ...(typeof data.refresh_token_expires_in === 'number' && data.refresh_token_expires_in > 0
+        ? { refreshTokenExpiresIn: data.refresh_token_expires_in }
+        : {}),
     };
   }
 
@@ -448,4 +459,67 @@ export async function pollGitHubDeviceToken(
         message: data.error_description ?? data.error ?? 'Unknown OAuth error',
       };
   }
+}
+
+export async function refreshGitHubDeviceToken(
+  clientId: string,
+  refreshToken: string,
+  githubHost = 'https://github.com',
+  fetchFn: typeof fetch = globalThis.fetch.bind(globalThis),
+): Promise<GitHubTokenRefreshResult> {
+  const base = githubHost.trim().replace(/\/+$/, '');
+  const body = new URLSearchParams({
+    client_id: clientId.trim(),
+    grant_type: 'refresh_token',
+    refresh_token: refreshToken.trim(),
+  });
+
+  const res = await fetchFn(`${base}/login/oauth/access_token`, {
+    method: 'POST',
+    headers: {
+      Accept: 'application/json',
+      'Content-Type': 'application/x-www-form-urlencoded',
+    },
+    body: body.toString(),
+  });
+
+  if (!res.ok) {
+    return {
+      status: 'error',
+      message: `GitHub token refresh failed (${res.status})`,
+    };
+  }
+
+  const data = (await res.json()) as {
+    access_token?: string;
+    token_type?: string;
+    scope?: string;
+    expires_in?: number;
+    refresh_token?: string;
+    refresh_token_expires_in?: number;
+    error?: string;
+    error_description?: string;
+  };
+
+  if (data.access_token) {
+    return {
+      status: 'refreshed',
+      accessToken: data.access_token,
+      tokenType: data.token_type ?? 'bearer',
+      scope: data.scope ?? '',
+      ...(typeof data.expires_in === 'number' && data.expires_in > 0
+        ? { expiresIn: data.expires_in }
+        : {}),
+      ...(data.refresh_token ? { refreshToken: data.refresh_token } : {}),
+      ...(typeof data.refresh_token_expires_in === 'number' && data.refresh_token_expires_in > 0
+        ? { refreshTokenExpiresIn: data.refresh_token_expires_in }
+        : {}),
+    };
+  }
+
+  return {
+    status: 'error',
+    ...(data.error ? { errorCode: data.error } : {}),
+    message: data.error_description ?? data.error ?? 'Failed to refresh GitHub access token',
+  };
 }

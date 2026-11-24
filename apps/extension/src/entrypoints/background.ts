@@ -1,4 +1,9 @@
-import { createForgeAdapter, pollGitHubDeviceToken, requestGitHubDeviceCode } from '@glyphrig/core';
+import {
+  ForgeError,
+  createForgeAdapter,
+  pollGitHubDeviceToken,
+  requestGitHubDeviceCode,
+} from '@glyphrig/core';
 import { browser } from 'wxt/browser';
 import { defineBackground } from 'wxt/utils/define-background';
 import { isDescendantOfFolder, listSelectableFolders } from '../lib/browser-tree.js';
@@ -20,6 +25,7 @@ import {
   setGithubOAuthClientIdOverride,
 } from '../lib/storage.js';
 import {
+  ensureFreshGitHubProfile,
   isEchoSuppressed,
   parseAlarmName,
   refreshPendingBadge,
@@ -183,18 +189,50 @@ async function handleMessage(msg: ExtensionMessage): Promise<unknown> {
     }
 
     case 'TEST_CONNECTION': {
-      const adapter = createForgeAdapter({
-        forge: msg.config.forge,
-        instanceUrl: msg.config.instanceUrl,
-        owner: msg.config.owner,
-        repo: msg.config.repo,
-        token: msg.config.token,
-      });
-      const [info, user] = await Promise.all([
-        adapter.testConnection(msg.config.branch),
-        adapter.getAuthenticatedUser().catch(() => null),
-      ]);
-      return { ...info, ...(user ? { username: user.username } : {}) };
+      let token = msg.config.token;
+      let matchedProfile = msg.config.profileId
+        ? (await getProfiles()).find((p) => p.id === msg.config.profileId)
+        : undefined;
+
+      if (
+        matchedProfile &&
+        matchedProfile.forge === 'github' &&
+        matchedProfile.refreshToken &&
+        matchedProfile.token === token
+      ) {
+        matchedProfile = await ensureFreshGitHubProfile(matchedProfile, false);
+        token = matchedProfile.token;
+      }
+
+      const runCheck = async (authToken: string) => {
+        const adapter = createForgeAdapter({
+          forge: msg.config.forge,
+          instanceUrl: msg.config.instanceUrl,
+          owner: msg.config.owner,
+          repo: msg.config.repo,
+          token: authToken,
+        });
+        const [info, user] = await Promise.all([
+          adapter.testConnection(msg.config.branch),
+          adapter.getAuthenticatedUser().catch(() => null),
+        ]);
+        return { ...info, ...(user ? { username: user.username } : {}) };
+      };
+
+      try {
+        return await runCheck(token);
+      } catch (err) {
+        if (
+          err instanceof ForgeError &&
+          err.code === 'auth' &&
+          matchedProfile?.forge === 'github' &&
+          matchedProfile.refreshToken
+        ) {
+          matchedProfile = await ensureFreshGitHubProfile(matchedProfile, true);
+          return await runCheck(matchedProfile.token);
+        }
+        throw err;
+      }
     }
 
     case 'START_GITHUB_DEVICE_FLOW': {

@@ -1,5 +1,14 @@
 import Link from 'next/link';
-import { DOC_ENTRIES, ISSUES_URL, RELEASES_URL, REPO_URL, withBasePath } from '@/lib/site';
+import {
+  CHROME_WEB_STORE_URL,
+  DOC_ENTRIES,
+  ISSUES_URL,
+  RELEASES_URL,
+  REPO_URL,
+  SPONSOR_NAME,
+  SPONSOR_URL,
+  withBasePath,
+} from '@/lib/site';
 
 export function SiteFooter() {
   return (
@@ -11,6 +20,17 @@ export function SiteFooter() {
             Local-first, MIT-licensed browser extension &amp; static site ecosystem for syncing a
             chosen bookmark folder with Git.
           </p>
+          <p style={{ margin: '8px 0 0' }}>
+            Sponsored by{' '}
+            <a
+              href={SPONSOR_URL}
+              target="_blank"
+              rel="noopener noreferrer"
+              style={{ color: 'var(--accent)', fontWeight: 600 }}
+            >
+              {SPONSOR_NAME}
+            </a>
+          </p>
         </div>
 
         <div className="footer-links">
@@ -21,6 +41,9 @@ export function SiteFooter() {
           ))}
           <Link href="/privacy/">Privacy Policy</Link>
           <a href={withBasePath('/PRIVACY.md')}>PRIVACY.md</a>
+          <a href={CHROME_WEB_STORE_URL} target="_blank" rel="noopener noreferrer">
+            Chrome Web Store
+          </a>
           <a href={RELEASES_URL} target="_blank" rel="noopener noreferrer">
             Releases
           </a>
