@@ -58,8 +58,20 @@ jobs:
             apps/extension/.output/*.zip
           generate_release_notes: true
 
+      - name: Check Chrome Web Store credentials
+        id: cws_check
+        env:
+          CWS_SA_JSON: ${{ secrets.CWS_SERVICE_ACCOUNT_JSON }}
+        run: |
+          if [ -n "${CWS_SA_JSON:-}" ]; then
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            echo "CWS_SERVICE_ACCOUNT_JSON secret is not set; skipping Chrome Web Store upload."
+          fi
+
       - name: Authenticate to Google Cloud (Chrome Web Store API v2)
-        if: ${{ secrets.CWS_SERVICE_ACCOUNT_JSON != '' }}
+        if: steps.cws_check.outputs.enabled == 'true'
         id: cws_auth
         uses: google-github-actions/auth@v2
         with:
@@ -69,7 +81,7 @@ jobs:
           create_credentials_file: false
 
       - name: Upload & Publish Chrome Extension (CWS API v2)
-        if: ${{ secrets.CWS_SERVICE_ACCOUNT_JSON != '' }}
+        if: steps.cws_check.outputs.enabled == 'true'
         env:
           ACCESS_TOKEN: ${{ steps.cws_auth.outputs.access_token }}
           PUBLISHER_ID: 57852504-88f0-4970-9c9f-e4f794ed0815
