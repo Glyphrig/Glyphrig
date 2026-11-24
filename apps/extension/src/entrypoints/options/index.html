@@ -113,16 +113,29 @@
             <fieldset class="fieldset">
               <legend>Authentication</legend>
               <div id="github-device-box" class="device-box">
-                <div class="row-between">
+                <div class="field">
+                  <label for="f-github-account">GitHub Account</label>
+                  <select id="f-github-account"></select>
+                  <span id="github-account-hint" class="muted small"></span>
+                </div>
+                <div class="row-between wrap-row">
                   <div>
                     <strong>GitHub OAuth Device Flow</strong>
                     <p class="muted small" id="device-hint">
-                      Sign in without manually creating a token.
+                      Sign in once and reuse your GitHub account across profiles.
                     </p>
                   </div>
-                  <button type="button" class="btn-secondary" id="btn-device-login">
-                    Sign in with GitHub
-                  </button>
+                  <div class="row-gap">
+                    <button type="button" class="btn-secondary" id="btn-device-login">
+                      Sign in with GitHub
+                    </button>
+                    <button type="button" class="btn-secondary" id="btn-add-github-account" hidden>
+                      + New Account
+                    </button>
+                    <button type="button" class="btn-danger btn-sm" id="btn-remove-github-account" hidden>
+                      Remove
+                    </button>
+                  </div>
                 </div>
                 <div id="device-pending" class="device-pending" hidden>
                   <div class="row-between">
@@ -145,7 +158,7 @@
                 </div>
               </div>
 
-              <div class="field">
+              <div class="field" id="pat-field-wrap">
                 <label for="f-token">Personal Access Token</label>
                 <input
                   id="f-token"

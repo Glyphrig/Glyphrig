@@ -1,15 +1,19 @@
 import {
+  DEFAULT_SAFETY_CONFIG,
   ForgeError,
   createForgeAdapter,
   pollGitHubDeviceToken,
   requestGitHubDeviceCode,
+  type ProfileConfig,
 } from '@glyphrig/core';
 import { browser } from 'wxt/browser';
 import { defineBackground } from 'wxt/utils/define-background';
+import { resolveEffectiveProfile } from '../lib/accounts.js';
 import { isDescendantOfFolder, listSelectableFolders } from '../lib/browser-tree.js';
 import type { ExtensionMessage, ExtensionStatePayload } from '../lib/messages.js';
 import {
   clearHistoryAndConflicts,
+  deleteSharedAccount,
   getActiveProfileId,
   getConflicts,
   getDirtyProfiles,
@@ -17,12 +21,15 @@ import {
   getGithubOAuthClientIdOverride,
   getHistory,
   getProfiles,
+  getSharedAccounts,
   getSnapshots,
   incrementDirtyProfile,
+  migrateLegacyDeviceFlowProfiles,
   saveProfiles,
   saveSnapshot,
   setActiveProfileId,
   setGithubOAuthClientIdOverride,
+  upsertSharedAccount,
 } from '../lib/storage.js';
 import {
   ensureFreshGitHubProfile,
@@ -74,8 +81,10 @@ async function runStartupPulls(): Promise<void> {
 }
 
 async function buildExtensionState(): Promise<ExtensionStatePayload> {
+  await migrateLegacyDeviceFlowProfiles();
   const [
     profiles,
+    sharedAccounts,
     activeProfileId,
     snapshots,
     history,
@@ -85,6 +94,7 @@ async function buildExtensionState(): Promise<ExtensionStatePayload> {
     effectiveGithubOAuthClientId,
   ] = await Promise.all([
     getProfiles(),
+    getSharedAccounts(),
     getActiveProfileId(),
     getSnapshots(),
     getHistory(),
@@ -96,6 +106,7 @@ async function buildExtensionState(): Promise<ExtensionStatePayload> {
 
   return {
     profiles,
+    sharedAccounts,
     activeProfileId: activeProfileId ?? profiles[0]?.id ?? null,
     snapshots,
     history,
@@ -163,6 +174,39 @@ async function handleMessage(msg: ExtensionMessage): Promise<unknown> {
       return buildExtensionState();
     }
 
+    case 'SAVE_SHARED_ACCOUNT': {
+      await upsertSharedAccount(msg.account);
+      return buildExtensionState();
+    }
+
+    case 'DELETE_SHARED_ACCOUNT': {
+      await deleteSharedAccount(msg.accountId);
+      const profiles = await getProfiles();
+      let changed = false;
+      const nextProfiles = profiles.map((p) => {
+        if (p.accountId !== msg.accountId) return p;
+        changed = true;
+        const copy = { ...p };
+        delete copy.accountId;
+        return copy;
+      });
+      if (changed) {
+        await saveProfiles(nextProfiles);
+      }
+      return buildExtensionState();
+    }
+
+    case 'FETCH_GITHUB_USER': {
+      const adapter = createForgeAdapter({
+        forge: 'github',
+        instanceUrl: msg.instanceUrl,
+        owner: 'user',
+        repo: 'repo',
+        token: msg.token,
+      });
+      return adapter.getAuthenticatedUser();
+    }
+
     case 'RUN_DRY_RUN':
       return runProfileDryRun(msg.profileId);
 
@@ -189,19 +233,50 @@ async function handleMessage(msg: ExtensionMessage): Promise<unknown> {
     }
 
     case 'TEST_CONNECTION': {
+      await migrateLegacyDeviceFlowProfiles();
+      const [profiles, accounts] = await Promise.all([getProfiles(), getSharedAccounts()]);
       let token = msg.config.token;
-      let matchedProfile = msg.config.profileId
-        ? (await getProfiles()).find((p) => p.id === msg.config.profileId)
-        : undefined;
+      let tempProfile: ProfileConfig | undefined;
 
-      if (
-        matchedProfile &&
-        matchedProfile.forge === 'github' &&
-        matchedProfile.refreshToken &&
-        matchedProfile.token === token
-      ) {
-        matchedProfile = await ensureFreshGitHubProfile(matchedProfile, false);
-        token = matchedProfile.token;
+      if (msg.config.accountId) {
+        const account = accounts.find((a) => a.id === msg.config.accountId);
+        if (!account) {
+          throw new Error('Selected GitHub account was not found.');
+        }
+        tempProfile = resolveEffectiveProfile(
+          {
+            id: msg.config.profileId || 'test-conn',
+            name: 'test',
+            enabled: true,
+            forge: 'github',
+            instanceUrl: msg.config.instanceUrl,
+            owner: msg.config.owner,
+            repo: msg.config.repo,
+            branch: msg.config.branch,
+            rootDir: 'bookmarks',
+            accountId: account.id,
+            token: '',
+            rootFolderId: '1',
+            autoSync: false,
+            pushDebounceSeconds: 60,
+            pullIntervalMinutes: 15,
+            safety: { ...DEFAULT_SAFETY_CONFIG },
+          },
+          accounts,
+        );
+        tempProfile = await ensureFreshGitHubProfile(tempProfile, false);
+        token = tempProfile.token;
+      } else if (msg.config.profileId) {
+        const saved = profiles.find((p) => p.id === msg.config.profileId);
+        if (
+          saved &&
+          saved.forge === 'github' &&
+          saved.refreshToken &&
+          saved.token === token
+        ) {
+          tempProfile = await ensureFreshGitHubProfile(saved, false);
+          token = tempProfile.token;
+        }
       }
 
       const runCheck = async (authToken: string) => {
@@ -225,11 +300,11 @@ async function handleMessage(msg: ExtensionMessage): Promise<unknown> {
         if (
           err instanceof ForgeError &&
           err.code === 'auth' &&
-          matchedProfile?.forge === 'github' &&
-          matchedProfile.refreshToken
+          tempProfile?.forge === 'github' &&
+          tempProfile.refreshToken
         ) {
-          matchedProfile = await ensureFreshGitHubProfile(matchedProfile, true);
-          return await runCheck(matchedProfile.token);
+          tempProfile = await ensureFreshGitHubProfile(tempProfile, true);
+          return await runCheck(tempProfile.token);
         }
         throw err;
       }

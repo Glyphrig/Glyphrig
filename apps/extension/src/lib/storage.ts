@@ -1,9 +1,17 @@
-import type { ConflictRecord, ProfileConfig, SyncSnapshot } from '@glyphrig/core';
+import {
+  generateId,
+  type ConflictRecord,
+  type ProfileConfig,
+  type SharedGitHubAccount,
+  type SyncSnapshot,
+} from '@glyphrig/core';
 import { browser } from 'wxt/browser';
+import { normalizeGitHubInstance } from './accounts.js';
 import type { SyncLogEntry } from './messages.js';
 
 const STORAGE_KEYS = {
   profiles: 'glyphrig_profiles',
+  sharedAccounts: 'glyphrig_shared_accounts',
   activeProfileId: 'glyphrig_active_profile_id',
   snapshots: 'glyphrig_snapshots',
   history: 'glyphrig_history',
@@ -123,4 +131,107 @@ export async function getEffectiveGithubOAuthClientId(): Promise<string> {
   const override = await getGithubOAuthClientIdOverride();
   if (override) return override;
   return (import.meta.env.VITE_GITHUB_OAUTH_CLIENT_ID ?? '').trim();
+}
+
+export async function getSharedAccounts(): Promise<SharedGitHubAccount[]> {
+  const res = await browser.storage.local.get(STORAGE_KEYS.sharedAccounts);
+  const val = res[STORAGE_KEYS.sharedAccounts];
+  return Array.isArray(val) ? (val as SharedGitHubAccount[]) : [];
+}
+
+export async function saveSharedAccounts(accounts: SharedGitHubAccount[]): Promise<void> {
+  await browser.storage.local.set({ [STORAGE_KEYS.sharedAccounts]: accounts });
+}
+
+export async function upsertSharedAccount(
+  account: SharedGitHubAccount,
+): Promise<SharedGitHubAccount[]> {
+  const existing = await getSharedAccounts();
+  const idx = existing.findIndex((a) => a.id === account.id);
+  const next = [...existing];
+  if (idx >= 0) {
+    next[idx] = account;
+  } else {
+    next.push(account);
+  }
+  await saveSharedAccounts(next);
+  return next;
+}
+
+export async function deleteSharedAccount(accountId: string): Promise<void> {
+  const existing = await getSharedAccounts();
+  const next = existing.filter((a) => a.id !== accountId);
+  if (next.length !== existing.length) {
+    await saveSharedAccounts(next);
+  }
+}
+
+let migrationPromise: Promise<void> | null = null;
+
+export function migrateLegacyDeviceFlowProfiles(): Promise<void> {
+  if (!migrationPromise) {
+    migrationPromise = (async () => {
+      const [profiles, accounts] = await Promise.all([getProfiles(), getSharedAccounts()]);
+      const nextAccounts = [...accounts];
+      let accountsChanged = false;
+      let profilesChanged = false;
+
+      const nextProfiles = profiles.map((p) => {
+        if (
+          p.forge !== 'github' ||
+          p.authMethod !== 'device-flow' ||
+          !p.token ||
+          p.accountId
+        ) {
+          return p;
+        }
+
+        const instanceUrl = normalizeGitHubInstance(p.instanceUrl);
+        let account = nextAccounts.find(
+          (a) =>
+            normalizeGitHubInstance(a.instanceUrl) === instanceUrl &&
+            a.token === p.token,
+        );
+
+        if (!account) {
+          account = {
+            id: generateId(),
+            instanceUrl,
+            ...(p.username ? { username: p.username } : {}),
+            token: p.token,
+            authMethod: 'device-flow',
+            ...(p.refreshToken ? { refreshToken: p.refreshToken } : {}),
+            ...(p.tokenExpiresAt ? { tokenExpiresAt: p.tokenExpiresAt } : {}),
+            ...(p.refreshTokenExpiresAt
+              ? { refreshTokenExpiresAt: p.refreshTokenExpiresAt }
+              : {}),
+            ...(p.oauthClientId ? { oauthClientId: p.oauthClientId } : {}),
+            updatedAt: new Date().toISOString(),
+          };
+          nextAccounts.push(account);
+          accountsChanged = true;
+        }
+
+        const migrated: ProfileConfig = {
+          ...p,
+          accountId: account.id,
+          token: '',
+        };
+        delete migrated.refreshToken;
+        delete migrated.tokenExpiresAt;
+        delete migrated.refreshTokenExpiresAt;
+        delete migrated.oauthClientId;
+        profilesChanged = true;
+        return migrated;
+      });
+
+      if (accountsChanged) {
+        await saveSharedAccounts(nextAccounts);
+      }
+      if (profilesChanged) {
+        await saveProfiles(nextProfiles);
+      }
+    })();
+  }
+  return migrationPromise;
 }

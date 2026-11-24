@@ -83,6 +83,20 @@ export interface ConflictRecord {
   remoteSummary: string;
 }
 
+export interface SharedGitHubAccount {
+  id: string;
+  instanceUrl: string;
+  username?: string;
+  displayName?: string;
+  token: string;
+  authMethod: 'device-flow' | 'pat';
+  refreshToken?: string;
+  tokenExpiresAt?: string;
+  refreshTokenExpiresAt?: string;
+  oauthClientId?: string;
+  updatedAt: string;
+}
+
 export interface ProfileConfig {
   id: string;
   name: string;
@@ -93,6 +107,7 @@ export interface ProfileConfig {
   repo: string;
   branch: string;
   rootDir: string;
+  accountId?: string;
   token: string;
   authMethod?: 'pat' | 'device-flow';
   refreshToken?: string;

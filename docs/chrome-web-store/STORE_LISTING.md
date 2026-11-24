@@ -147,7 +147,7 @@ Raw Markdown mirror: `https://glyphrig.github.io/Glyphrig/PRIVACY.md` (or `https
 
 | CWS Dashboard Slot | Required Spec | Ready File | Verified Output |
 | :--- | :--- | :--- | :--- |
-| **Extension Package** | Manifest V3 `.zip` | `apps/extension/.output/glyphrigextension-0.4.3-chrome.zip` | Built via `pnpm --filter @glyphrig/extension zip` |
+| **Extension Package** | Manifest V3 `.zip` | `apps/extension/.output/glyphrigextension-0.4.4-chrome.zip` | Built via `pnpm --filter @glyphrig/extension zip` |
 | **Store Icon** | `128×128` PNG (RGBA, padded) | `docs/chrome-web-store/assets/store-icon-128x128.png` | `128×128` RGBA (`TrueColorAlpha`, 12px padding) |
 | **Small Promo Tile** | `440×280` PNG/JPEG (no alpha) | `docs/chrome-web-store/assets/promo-small-440x280.png` | `440×280` RGB (`TrueColor`, PNG24) |
 | **Marquee Promo Tile** | `1400×560` PNG/JPEG (no alpha) | `docs/chrome-web-store/assets/promo-marquee-1400x560.png` | `1400×560` RGB (`TrueColor`, PNG24) |

@@ -83,9 +83,11 @@ Even without rebuilding the extension, you can paste a Client ID directly in the
 2. Create or edit a profile with Forge set to **GitHub**.
 3. Click **Sign in with GitHub**.
 4. Glyphrig opens a pop-out modal displaying an 8-character code (e.g., `ABCD-1234`), copies it to your clipboard automatically (with a **Copy Code** button), and lets you click **Open GitHub Authorization Page** when ready.
-5. Paste the code and authorize the app — Glyphrig automatically detects authorization, saves the token (and refresh token metadata if your app issues expiring 8-hour tokens) into `browser.storage.local`, and auto-saves existing profiles.
+5. Paste the code and authorize the app — Glyphrig automatically detects authorization, saves the token (and refresh token metadata if your app issues expiring 8-hour tokens) as a **Shared GitHub Account** in `browser.storage.local`, and lets you reuse that single sign-in across as many sync profiles as you want.
 
 ## Token Lifetimes & Troubleshooting
+
+- **Shared Accounts Across Profiles:** Each GitHub Device Flow sign-in is stored as a shared account (`@username`) that automatically defaults onto new GitHub profiles. Re-authorizing or rotating a refresh token updates every linked profile at once without hitting GitHub's 10-token cap.
 
 - **Expiring vs. Non-Expiring Tokens:** Classic GitHub OAuth Apps normally issue non-expiring `gho_` tokens unless *Expire user authorization tokens* is enabled (typically **8-hour** access tokens paired with **6-month** rotating `refresh_token`s). Glyphrig automatically refreshes expiring tokens before syncs and on `401` errors whenever GitHub returns a `refresh_token`.
 - **10-Token Limit per User & OAuth App:** GitHub only retains up to **10** active OAuth tokens per user per OAuth App. Authorizing the same Client ID more than 10 times across separate browsers or profiles silently revokes the oldest token—reuse your token via **Export/Import Backup** or issue a fine-grained PAT (`Contents: Read and write`) for additional devices.

@@ -5,10 +5,16 @@ import {
   type GitHubDeviceCodeResponse,
   type GitHubDeviceTokenPollResult,
   type ProfileConfig,
+  type SharedGitHubAccount,
   type SyncMode,
   type SyncResult,
 } from '@glyphrig/core';
 import { browser } from 'wxt/browser';
+import {
+  countProfilesUsingAccount,
+  findMatchingSharedAccount,
+  normalizeGitHubInstance,
+} from '../../lib/accounts.js';
 import type {
   DryRunPreviewPayload,
   ExtensionMessage,
@@ -93,7 +99,12 @@ const siteUrlInput = document.getElementById('f-siteurl') as HTMLInputElement;
 const tokenInput = document.getElementById('f-token') as HTMLInputElement;
 const tokenHintEl = document.getElementById('token-scope-hint')!;
 const githubDeviceBox = document.getElementById('github-device-box')!;
+const githubAccountSelect = document.getElementById('f-github-account') as HTMLSelectElement;
+const githubAccountHintEl = document.getElementById('github-account-hint')!;
+const patFieldWrap = document.getElementById('pat-field-wrap')!;
 const deviceLoginBtn = document.getElementById('btn-device-login') as HTMLButtonElement;
+const addGithubAccountBtn = document.getElementById('btn-add-github-account') as HTMLButtonElement;
+const removeGithubAccountBtn = document.getElementById('btn-remove-github-account') as HTMLButtonElement;
 const devicePendingBox = document.getElementById('device-pending')!;
 const deviceCodeEl = document.getElementById('device-user-code')!;
 const deviceVerifyLink = document.getElementById('device-verify-link') as HTMLAnchorElement;
@@ -137,6 +148,8 @@ let editingProfileId: string | null = null;
 let selectedFolderId = '';
 let selectedFolderTitle = '';
 let authMethod: 'pat' | 'device-flow' = 'pat';
+let selectedAccountId = '';
+let deviceFlowMode: 'update-current' | 'add-new' = 'update-current';
 let oauthRefreshToken: string | undefined;
 let oauthTokenExpiresAt: string | undefined;
 let oauthRefreshTokenExpiresAt: string | undefined;
@@ -186,11 +199,80 @@ function stopDevicePoll(): void {
   }
 }
 
+function renderGitHubAccountSelect(): void {
+  const forge = forgeSelect.value as ForgeKind;
+  if (forge !== 'github') {
+    patFieldWrap.hidden = false;
+    tokenInput.required = true;
+    return;
+  }
+
+  const targetInstance = normalizeGitHubInstance(instanceInput.value);
+  const matchingAccounts = (state?.sharedAccounts ?? []).filter(
+    (acc) => normalizeGitHubInstance(acc.instanceUrl) === targetInstance,
+  );
+
+  if (selectedAccountId && !matchingAccounts.some((a) => a.id === selectedAccountId)) {
+    selectedAccountId = '';
+  }
+
+  githubAccountSelect.innerHTML = '';
+  for (const acc of matchingAccounts) {
+    const opt = document.createElement('option');
+    opt.value = acc.id;
+    const count = countProfilesUsingAccount(state?.profiles ?? [], acc.id);
+    const labelName = acc.username ? `@${acc.username}` : 'GitHub Account';
+    const hostLabel = targetInstance.replace(/^https?:\/\//, '');
+    opt.textContent = `${labelName} · ${hostLabel}${count > 0 ? ` (${count} profile${count === 1 ? '' : 's'})` : ''}`;
+    opt.selected = acc.id === selectedAccountId;
+    githubAccountSelect.append(opt);
+  }
+
+  const patOpt = document.createElement('option');
+  patOpt.value = '__pat__';
+  patOpt.textContent = 'Profile-specific Personal Access Token (PAT)';
+  patOpt.selected = !selectedAccountId;
+  githubAccountSelect.append(patOpt);
+
+  githubAccountSelect.value = selectedAccountId || '__pat__';
+
+  const activeAccount = matchingAccounts.find((a) => a.id === selectedAccountId);
+  if (activeAccount) {
+    patFieldWrap.hidden = true;
+    tokenInput.required = false;
+    deviceLoginBtn.textContent = 'Re-authorize';
+    addGithubAccountBtn.hidden = false;
+    removeGithubAccountBtn.hidden = false;
+    const count = countProfilesUsingAccount(state?.profiles ?? [], activeAccount.id);
+    const refreshStatus = activeAccount.refreshToken
+      ? 'Auto-refresh enabled'
+      : activeAccount.tokenExpiresAt
+        ? `Expires ${new Date(activeAccount.tokenExpiresAt).toLocaleString()}`
+        : 'Reusable OAuth token';
+    githubAccountHintEl.textContent = `${refreshStatus} · Linked to ${count} profile${count === 1 ? '' : 's'}.`;
+    if (activeAccount.username) {
+      verifiedUsername = activeAccount.username;
+      renderVerifiedUsername();
+    }
+  } else {
+    patFieldWrap.hidden = false;
+    tokenInput.required = true;
+    deviceLoginBtn.textContent = 'Sign in with GitHub';
+    addGithubAccountBtn.hidden = matchingAccounts.length === 0;
+    removeGithubAccountBtn.hidden = true;
+    githubAccountHintEl.textContent =
+      matchingAccounts.length > 0
+        ? 'Using a profile-specific PAT, or pick a saved GitHub account above.'
+        : 'Sign in with GitHub above or paste a fine-grained PAT below.';
+  }
+}
+
 function updateForgeUi(): void {
   const forge = forgeSelect.value as ForgeKind;
   instanceInput.placeholder = defaultInstancePlaceholder(forge);
   tokenHintEl.textContent = tokenHintForForge(forge);
   githubDeviceBox.hidden = forge !== 'github';
+  renderGitHubAccountSelect();
 }
 
 function renderFolderPicker(): void {
@@ -257,13 +339,17 @@ function loadProfileIntoForm(profile: ProfileConfig | null): void {
     rootDirInput.value = 'bookmarks';
     instanceInput.value = '';
     siteUrlInput.value = '';
+    const defaultGithubAccount = (state?.sharedAccounts ?? []).find(
+      (a) => normalizeGitHubInstance(a.instanceUrl) === 'https://github.com',
+    );
+    selectedAccountId = defaultGithubAccount?.id ?? '';
     tokenInput.value = '';
-    authMethod = 'pat';
+    authMethod = defaultGithubAccount ? defaultGithubAccount.authMethod : 'pat';
     oauthRefreshToken = undefined;
     oauthTokenExpiresAt = undefined;
     oauthRefreshTokenExpiresAt = undefined;
     oauthClientId = undefined;
-    verifiedUsername = '';
+    verifiedUsername = defaultGithubAccount?.username ?? '';
     selectedFolderId = '';
     selectedFolderTitle = '';
     enabledCheck.checked = true;
@@ -287,13 +373,17 @@ function loadProfileIntoForm(profile: ProfileConfig | null): void {
     rootDirInput.value = profile.rootDir || 'bookmarks';
     instanceInput.value = profile.instanceUrl ?? '';
     siteUrlInput.value = profile.siteUrl ?? '';
-    tokenInput.value = profile.token;
-    authMethod = profile.authMethod ?? 'pat';
-    oauthRefreshToken = profile.refreshToken;
-    oauthTokenExpiresAt = profile.tokenExpiresAt;
-    oauthRefreshTokenExpiresAt = profile.refreshTokenExpiresAt;
-    oauthClientId = profile.oauthClientId;
-    verifiedUsername = profile.username ?? '';
+    selectedAccountId = profile.forge === 'github' ? (profile.accountId ?? '') : '';
+    const linkedAcc = selectedAccountId
+      ? (state?.sharedAccounts ?? []).find((a) => a.id === selectedAccountId)
+      : undefined;
+    tokenInput.value = selectedAccountId ? '' : profile.token;
+    authMethod = linkedAcc?.authMethod ?? profile.authMethod ?? 'pat';
+    oauthRefreshToken = selectedAccountId ? undefined : profile.refreshToken;
+    oauthTokenExpiresAt = selectedAccountId ? undefined : profile.tokenExpiresAt;
+    oauthRefreshTokenExpiresAt = selectedAccountId ? undefined : profile.refreshTokenExpiresAt;
+    oauthClientId = selectedAccountId ? undefined : profile.oauthClientId;
+    verifiedUsername = linkedAcc?.username || profile.username || '';
     selectedFolderId = profile.rootFolderId;
     selectedFolderTitle = profile.rootFolderTitle ?? '';
     enabledCheck.checked = profile.enabled;
@@ -315,25 +405,36 @@ function buildProfileFromForm(): ProfileConfig {
   if (!selectedFolderId) {
     throw new Error('Please choose a bookmark folder to sync.');
   }
+  const forge = forgeSelect.value as ForgeKind;
+  const usingSharedAccount = forge === 'github' && Boolean(selectedAccountId);
+  const linkedAccount = usingSharedAccount
+    ? (state?.sharedAccounts ?? []).find((a) => a.id === selectedAccountId)
+    : undefined;
+
+  if (!usingSharedAccount && !tokenInput.value.trim()) {
+    throw new Error('Please provide a Personal Access Token or sign in with GitHub.');
+  }
+
   return {
     id: editingProfileId ?? generateId(),
     name: nameInput.value.trim() || 'Bookmarks',
     enabled: enabledCheck.checked,
     syncMode: (syncModeSelect.value as SyncMode) || 'two-way',
-    forge: forgeSelect.value as ForgeKind,
+    forge,
     ...(instanceInput.value.trim() ? { instanceUrl: instanceInput.value.trim() } : {}),
     owner: ownerInput.value.trim(),
     repo: repoInput.value.trim(),
     branch: branchInput.value.trim() || 'main',
     rootDir: rootDirInput.value.trim() || 'bookmarks',
-    token: tokenInput.value.trim(),
-    authMethod,
-    ...(oauthRefreshToken ? { refreshToken: oauthRefreshToken } : {}),
-    ...(oauthTokenExpiresAt ? { tokenExpiresAt: oauthTokenExpiresAt } : {}),
-    ...(oauthRefreshTokenExpiresAt
+    ...(usingSharedAccount ? { accountId: selectedAccountId } : {}),
+    token: usingSharedAccount ? '' : tokenInput.value.trim(),
+    authMethod: usingSharedAccount ? (linkedAccount?.authMethod ?? 'device-flow') : authMethod,
+    ...(!usingSharedAccount && oauthRefreshToken ? { refreshToken: oauthRefreshToken } : {}),
+    ...(!usingSharedAccount && oauthTokenExpiresAt ? { tokenExpiresAt: oauthTokenExpiresAt } : {}),
+    ...(!usingSharedAccount && oauthRefreshTokenExpiresAt
       ? { refreshTokenExpiresAt: oauthRefreshTokenExpiresAt }
       : {}),
-    ...(oauthClientId ? { oauthClientId } : {}),
+    ...(!usingSharedAccount && oauthClientId ? { oauthClientId } : {}),
     ...(verifiedUsername ? { username: verifiedUsername } : {}),
     rootFolderId: selectedFolderId,
     ...(selectedFolderTitle ? { rootFolderTitle: selectedFolderTitle } : {}),
@@ -553,14 +654,32 @@ forgeSelect.addEventListener('change', () => {
   updateForgeUi();
   clearVerifiedUsername();
 });
-instanceInput.addEventListener('input', clearVerifiedUsername);
+instanceInput.addEventListener('input', () => {
+  renderGitHubAccountSelect();
+  clearVerifiedUsername();
+});
+githubAccountSelect.addEventListener('change', () => {
+  selectedAccountId = githubAccountSelect.value === '__pat__' ? '' : githubAccountSelect.value;
+  if (selectedAccountId) {
+    const acc = (state?.sharedAccounts ?? []).find((a) => a.id === selectedAccountId);
+    authMethod = acc?.authMethod ?? 'device-flow';
+    verifiedUsername = acc?.username ?? '';
+    renderVerifiedUsername();
+  } else {
+    authMethod = 'pat';
+    clearVerifiedUsername();
+  }
+  renderGitHubAccountSelect();
+});
 tokenInput.addEventListener('input', () => {
+  selectedAccountId = '';
   authMethod = 'pat';
   oauthRefreshToken = undefined;
   oauthTokenExpiresAt = undefined;
   oauthRefreshTokenExpiresAt = undefined;
   oauthClientId = undefined;
   clearVerifiedUsername();
+  renderGitHubAccountSelect();
 });
 
 document.getElementById('btn-new-profile')?.addEventListener('click', () => {
@@ -595,8 +714,9 @@ const importConfigInput = document.getElementById('input-import-config') as HTML
 document.getElementById('btn-export-config')?.addEventListener('click', () => {
   if (!state) return;
   const payload = {
-    version: 1,
+    version: 2,
     exportedAt: new Date().toISOString(),
+    sharedAccounts: state.sharedAccounts,
     profiles: state.profiles,
     activeProfileId: state.activeProfileId,
     githubOAuthClientIdOverride: state.githubOAuthClientIdOverride,
@@ -608,7 +728,7 @@ document.getElementById('btn-export-config')?.addEventListener('click', () => {
   a.download = `glyphrig-config-backup-${new Date().toISOString().slice(0, 10)}.json`;
   a.click();
   URL.revokeObjectURL(url);
-  backupStatusEl.textContent = `Exported ${state.profiles.length} profile(s).`;
+  backupStatusEl.textContent = `Exported ${state.profiles.length} profile(s) and ${state.sharedAccounts.length} GitHub account(s).`;
 });
 
 document.getElementById('btn-import-config')?.addEventListener('click', () => {
@@ -621,12 +741,19 @@ importConfigInput.addEventListener('change', async () => {
   if (!file) return;
   try {
     const parsed = JSON.parse(await file.text()) as {
+      sharedAccounts?: SharedGitHubAccount[];
       profiles?: ProfileConfig[];
       activeProfileId?: string | null;
       githubOAuthClientIdOverride?: string;
     };
     if (!Array.isArray(parsed.profiles)) {
       throw new Error('Invalid backup file: missing profiles array.');
+    }
+    if (Array.isArray(parsed.sharedAccounts)) {
+      for (const account of parsed.sharedAccounts) {
+        await ensureOriginPermission(account.instanceUrl);
+        state = await sendRpc<ExtensionStatePayload>({ type: 'SAVE_SHARED_ACCOUNT', account });
+      }
     }
     for (const profile of parsed.profiles) {
       await ensureOriginPermission(profile.instanceUrl);
@@ -670,12 +797,15 @@ document.getElementById('btn-test-conn')?.addEventListener('click', async () => 
       type: 'TEST_CONNECTION',
       config: {
         ...(editingProfileId ? { profileId: editingProfileId } : {}),
+        ...(forgeSelect.value === 'github' && selectedAccountId
+          ? { accountId: selectedAccountId }
+          : {}),
         forge: forgeSelect.value as ForgeKind,
         instanceUrl: instanceInput.value.trim() || undefined,
         owner: ownerInput.value.trim(),
         repo: repoInput.value.trim(),
         branch: branchInput.value.trim() || 'main',
-        token: tokenInput.value.trim(),
+        token: forgeSelect.value === 'github' && selectedAccountId ? '' : tokenInput.value.trim(),
       },
     });
     verifiedUsername = info.username ?? '';
@@ -689,13 +819,16 @@ document.getElementById('btn-test-conn')?.addEventListener('click', async () => 
   }
 });
 
-deviceLoginBtn.addEventListener('click', async () => {
+async function startDeviceFlow(mode: 'update-current' | 'add-new'): Promise<void> {
+  deviceFlowMode = mode;
   stopDevicePoll();
   deviceLoginBtn.disabled = true;
+  addGithubAccountBtn.disabled = true;
   devicePollStatus.textContent = 'Requesting device code…';
   try {
     await ensureOriginPermission(instanceInput.value);
     const instanceHost = instanceInput.value.trim() || undefined;
+    const normalizedHost = normalizeGitHubInstance(instanceHost);
     const codeRes = await sendRpc<GitHubDeviceCodeResponse>({
       type: 'START_GITHUB_DEVICE_FLOW',
       instanceUrl: instanceHost,
@@ -734,17 +867,68 @@ deviceLoginBtn.addEventListener('click', async () => {
           instanceUrl: instanceHost,
         });
         if (res.status === 'authorized') {
-          tokenInput.value = res.accessToken;
-          authMethod = 'device-flow';
-          oauthRefreshToken = res.refreshToken;
-          oauthTokenExpiresAt = res.expiresIn
+          let ghUser: { username?: string; displayName?: string } = {};
+          try {
+            ghUser = await sendRpc<{ username?: string; displayName?: string }>({
+              type: 'FETCH_GITHUB_USER',
+              token: res.accessToken,
+              instanceUrl: instanceHost,
+            });
+          } catch {
+            // Best-effort lookup; proceed with saving account
+          }
+
+          const existingMatch =
+            deviceFlowMode === 'update-current' && selectedAccountId
+              ? state?.sharedAccounts.find((a) => a.id === selectedAccountId)
+              : findMatchingSharedAccount(state?.sharedAccounts ?? [], {
+                  instanceUrl: normalizedHost,
+                  username: ghUser.username,
+                });
+
+          const tokenExpiresAt = res.expiresIn
             ? new Date(Date.now() + res.expiresIn * 1000).toISOString()
             : undefined;
-          oauthRefreshTokenExpiresAt = res.refreshTokenExpiresIn
+          const refreshTokenExpiresAt = res.refreshTokenExpiresIn
             ? new Date(Date.now() + res.refreshTokenExpiresIn * 1000).toISOString()
             : undefined;
-          oauthClientId = state?.effectiveGithubOAuthClientId || undefined;
-          clearVerifiedUsername();
+          const clientId = state?.effectiveGithubOAuthClientId || undefined;
+
+          const account: SharedGitHubAccount = {
+            id: existingMatch?.id ?? generateId(),
+            instanceUrl: normalizedHost,
+            ...(ghUser.username
+              ? { username: ghUser.username }
+              : existingMatch?.username
+                ? { username: existingMatch.username }
+                : {}),
+            ...(ghUser.displayName
+              ? { displayName: ghUser.displayName }
+              : existingMatch?.displayName
+                ? { displayName: existingMatch.displayName }
+                : {}),
+            token: res.accessToken,
+            authMethod: 'device-flow',
+            ...(res.refreshToken ? { refreshToken: res.refreshToken } : {}),
+            ...(tokenExpiresAt ? { tokenExpiresAt } : {}),
+            ...(refreshTokenExpiresAt ? { refreshTokenExpiresAt } : {}),
+            ...(clientId ? { oauthClientId: clientId } : {}),
+            updatedAt: new Date().toISOString(),
+          };
+
+          state = await sendRpc<ExtensionStatePayload>({
+            type: 'SAVE_SHARED_ACCOUNT',
+            account,
+          });
+          selectedAccountId = account.id;
+          authMethod = 'device-flow';
+          tokenInput.value = '';
+          oauthRefreshToken = undefined;
+          oauthTokenExpiresAt = undefined;
+          oauthRefreshTokenExpiresAt = undefined;
+          oauthClientId = undefined;
+          verifiedUsername = account.username ?? '';
+          renderVerifiedUsername();
 
           const lifetimeNote = res.refreshToken
             ? 'Auto-refresh enabled (6-month rolling session).'
@@ -752,40 +936,13 @@ deviceLoginBtn.addEventListener('click', async () => {
               ? `Note: GitHub issued an expiring token (~${Math.max(1, Math.round(res.expiresIn / 3600))}h) without a refresh token.`
               : 'Non-expiring GitHub OAuth token.';
 
-          let savedNote = 'Finish configuring your repository & folder, then click Save Profile.';
+          let savedNote = 'Account ready — select your repo & folder, then click Save Profile.';
           if (selectedFolderId && ownerInput.value.trim() && repoInput.value.trim()) {
             try {
               const profile = buildProfileFromForm();
               state = await sendRpc<ExtensionStatePayload>({ type: 'SAVE_PROFILE', profile });
               editingProfileId = profile.id;
-
-              try {
-                const info = await sendRpc<{ username?: string }>({
-                  type: 'TEST_CONNECTION',
-                  config: {
-                    profileId: profile.id,
-                    forge: profile.forge,
-                    instanceUrl: profile.instanceUrl,
-                    owner: profile.owner,
-                    repo: profile.repo,
-                    branch: profile.branch,
-                    token: profile.token,
-                  },
-                });
-                if (info.username) {
-                  verifiedUsername = info.username;
-                  renderVerifiedUsername();
-                  state = await sendRpc<ExtensionStatePayload>({
-                    type: 'SAVE_PROFILE',
-                    profile: buildProfileFromForm(),
-                  });
-                }
-              } catch {
-                // Best-effort attribution lookup; token is already saved
-              }
-
-              renderState();
-              savedNote = 'Token saved automatically to your profile.';
+              savedNote = 'Linked & saved automatically to your profile.';
             } catch (saveErr) {
               savedNote =
                 saveErr instanceof Error
@@ -794,7 +951,14 @@ deviceLoginBtn.addEventListener('click', async () => {
             }
           }
 
-          const successMsg = `✓ Authorized! ${savedNote} ${lifetimeNote}`;
+          renderGitHubAccountSelect();
+          renderState();
+
+          const linkedCount = countProfilesUsingAccount(state?.profiles ?? [], account.id);
+          const who = account.username ? `@${account.username}` : 'GitHub account';
+          const reuseNote =
+            linkedCount > 1 ? ` Shared across ${linkedCount} profiles.` : '';
+          const successMsg = `✓ Authorized ${who}! ${savedNote}${reuseNote} ${lifetimeNote}`;
           devicePollStatus.textContent = successMsg;
           setDeviceModalStatus(successMsg, 'ok');
           cancelDeviceModalBtn.hidden = true;
@@ -823,7 +987,34 @@ deviceLoginBtn.addEventListener('click', async () => {
     setDeviceModalStatus(msg, 'err');
   } finally {
     deviceLoginBtn.disabled = false;
+    addGithubAccountBtn.disabled = false;
   }
+}
+
+deviceLoginBtn.addEventListener('click', () => {
+  void startDeviceFlow(selectedAccountId ? 'update-current' : 'add-new');
+});
+
+addGithubAccountBtn?.addEventListener('click', () => {
+  void startDeviceFlow('add-new');
+});
+
+removeGithubAccountBtn?.addEventListener('click', async () => {
+  if (!selectedAccountId) return;
+  const count = countProfilesUsingAccount(state?.profiles ?? [], selectedAccountId);
+  const confirmMsg =
+    count > 0
+      ? `Remove this shared GitHub account? ${count} profile(s) currently use it.`
+      : 'Remove this shared GitHub account?';
+  if (!window.confirm(confirmMsg)) return;
+
+  state = await sendRpc<ExtensionStatePayload>({
+    type: 'DELETE_SHARED_ACCOUNT',
+    accountId: selectedAccountId,
+  });
+  selectedAccountId = '';
+  renderGitHubAccountSelect();
+  renderState();
 });
 
 modalCopyCodeBtn?.addEventListener('click', async () => {

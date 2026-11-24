@@ -8,6 +8,7 @@ import {
   type SyncResult,
 } from '@glyphrig/core';
 import { browser } from 'wxt/browser';
+import { resolveEffectiveProfile } from './accounts.js';
 import { applyTreeToBrowser, readBrowserSubtree } from './browser-tree.js';
 import type { DryRunPreviewPayload, SyncLogEntry } from './messages.js';
 import {
@@ -16,8 +17,10 @@ import {
   clearDirtyProfile,
   getEffectiveGithubOAuthClientId,
   getProfiles,
+  getSharedAccounts,
   getSnapshots,
   saveProfiles,
+  saveSharedAccounts,
   saveSnapshot,
 } from './storage.js';
 
@@ -75,12 +78,41 @@ export async function ensureFreshGitHubProfile(
         ? new Date(Date.now() + res.refreshTokenExpiresIn * 1000).toISOString()
         : profile.refreshTokenExpiresAt;
 
-      const profiles = await getProfiles();
+      const [profiles, sharedAccounts] = await Promise.all([
+        getProfiles(),
+        getSharedAccounts(),
+      ]);
+
+      let sharedChanged = false;
+      const nextSharedAccounts = sharedAccounts.map((acc) => {
+        if (acc.id !== profile.accountId && acc.refreshToken !== oldRefreshToken) {
+          return acc;
+        }
+        sharedChanged = true;
+        return {
+          ...acc,
+          token: res.accessToken,
+          refreshToken: nextRefreshToken,
+          oauthClientId: clientId,
+          updatedAt: new Date().toISOString(),
+          ...(tokenExpiresAt ? { tokenExpiresAt } : {}),
+          ...(refreshTokenExpiresAt ? { refreshTokenExpiresAt } : {}),
+        };
+      });
+      if (sharedChanged) {
+        await saveSharedAccounts(nextSharedAccounts);
+      }
+
       let updatedSelf: ProfileConfig | null = null;
+      let profilesChanged = false;
       const nextProfiles = profiles.map((p) => {
+        if (p.accountId) {
+          return p;
+        }
         if (p.id !== profile.id && p.refreshToken !== oldRefreshToken) {
           return p;
         }
+        profilesChanged = true;
         const updated: ProfileConfig = {
           ...p,
           token: res.accessToken,
@@ -101,7 +133,9 @@ export async function ensureFreshGitHubProfile(
         return updated;
       });
 
-      await saveProfiles(nextProfiles);
+      if (profilesChanged) {
+        await saveProfiles(nextProfiles);
+      }
       return (
         updatedSelf ?? {
           ...profile,
@@ -273,11 +307,17 @@ async function executeSync(
   dryRun: boolean,
   trigger: SyncLogEntry['trigger'],
 ): Promise<SyncResult> {
-  if (!profile.token || !profile.owner || !profile.repo || !profile.rootFolderId) {
+  const resolvedProfile = resolveEffectiveProfile(profile, await getSharedAccounts());
+  if (
+    !resolvedProfile.token ||
+    !resolvedProfile.owner ||
+    !resolvedProfile.repo ||
+    !resolvedProfile.rootFolderId
+  ) {
     throw new Error('Profile is missing repository credentials or bookmark folder.');
   }
 
-  let activeProfile = await ensureFreshGitHubProfile(profile, false);
+  let activeProfile = await ensureFreshGitHubProfile(resolvedProfile, false);
   const snapshots = await getSnapshots();
   const snapshot = snapshots[activeProfile.id] ?? null;
   const localTree = await readBrowserSubtree(activeProfile.rootFolderId);
@@ -298,12 +338,27 @@ async function executeSync(
         const fetched = authUser?.username?.trim();
         if (fetched) {
           currentUser = fetched;
-          const profiles = await getProfiles();
+          const [profiles, accounts] = await Promise.all([
+            getProfiles(),
+            getSharedAccounts(),
+          ]);
           const idx = profiles.findIndex((p) => p.id === targetProfile.id);
           if (idx >= 0) {
             const updated = [...profiles];
             updated[idx] = { ...updated[idx]!, username: fetched };
             await saveProfiles(updated);
+          }
+          if (targetProfile.accountId) {
+            const accIdx = accounts.findIndex((a) => a.id === targetProfile.accountId);
+            if (accIdx >= 0 && !accounts[accIdx]!.username) {
+              const updatedAccs = [...accounts];
+              updatedAccs[accIdx] = {
+                ...updatedAccs[accIdx]!,
+                username: fetched,
+                ...(authUser.displayName ? { displayName: authUser.displayName } : {}),
+              };
+              await saveSharedAccounts(updatedAccs);
+            }
           }
         }
       } catch {

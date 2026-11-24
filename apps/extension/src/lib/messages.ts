@@ -2,6 +2,7 @@ import type {
   ConflictRecord,
   ForgeKind,
   ProfileConfig,
+  SharedGitHubAccount,
   SkippedUrlRecord,
   SyncDiffSummary,
   SyncSnapshot,
@@ -44,6 +45,7 @@ export interface DryRunPreviewPayload {
 
 export interface ExtensionStatePayload {
   profiles: ProfileConfig[];
+  sharedAccounts: SharedGitHubAccount[];
   activeProfileId: string | null;
   snapshots: Record<string, SyncSnapshot>;
   history: SyncLogEntry[];
@@ -59,6 +61,9 @@ export type ExtensionMessage =
   | { type: 'LIST_FOLDERS' }
   | { type: 'SAVE_PROFILE'; profile: ProfileConfig }
   | { type: 'DELETE_PROFILE'; profileId: string }
+  | { type: 'SAVE_SHARED_ACCOUNT'; account: SharedGitHubAccount }
+  | { type: 'DELETE_SHARED_ACCOUNT'; accountId: string }
+  | { type: 'FETCH_GITHUB_USER'; token: string; instanceUrl?: string }
   | { type: 'RUN_DRY_RUN'; profileId: string }
   | { type: 'RUN_SYNC'; profileId: string; trigger?: 'manual' }
   | { type: 'RUN_SYNC_ALL' }
@@ -66,6 +71,7 @@ export type ExtensionMessage =
       type: 'TEST_CONNECTION';
       config: {
         profileId?: string;
+        accountId?: string;
         forge: ForgeKind;
         instanceUrl?: string;
         owner: string;

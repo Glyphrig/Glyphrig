@@ -272,10 +272,17 @@ select {
 }
 
 .device-box {
-  padding: 10px;
+  padding: 12px;
   border-radius: 8px;
   background: var(--surface-muted);
   margin-bottom: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.wrap-row {
+  flex-wrap: wrap;
 }
 
 .device-pending {
