@@ -1,7 +1,18 @@
-import type { BookmarkEntry, ForgeKind } from '@glyphrig/core';
+import type { AutoTagRule, BookmarkEntry, ForgeKind, SyncMode } from '@glyphrig/core';
 
 export type ColorSchemePreference = 'system' | 'light' | 'dark';
 export type ThemeMode = 'extend' | 'replace' | 'astro';
+
+export interface SiteCollaborationConfig {
+  forge: ForgeKind;
+  instanceUrl?: string;
+  owner: string;
+  repo: string;
+  branch: string;
+  rootDir: string;
+  recommendedSyncMode?: SyncMode;
+  allowSuggestions?: boolean;
+}
 
 export interface SiteConfig {
   site: {
@@ -25,6 +36,8 @@ export interface SiteConfig {
     fetchFavicons: boolean;
     fetchOgImage: boolean;
     autoTags: boolean;
+    autoTagRules?: AutoTagRule[];
+    checkWayback?: boolean;
     concurrency: number;
     timeoutMs: number;
     ttlDays: number;
@@ -41,6 +54,7 @@ export interface SiteConfig {
       rootDir: string;
     };
   };
+  collaboration?: SiteCollaborationConfig;
 }
 
 export interface EnrichedBookmark extends BookmarkEntry {
@@ -53,6 +67,9 @@ export interface EnrichedBookmark extends BookmarkEntry {
   ogImage?: string;
   faviconPath?: string;
   scrapedTitle?: string;
+  linkStatus?: 'ok' | 'dead' | 'unknown';
+  httpStatus?: number;
+  waybackUrl?: string;
   savedBy: string[];
   globalSavedBy: string[];
   popularity: number;
@@ -70,6 +87,7 @@ export interface EnrichedFolderNode {
   title: string;
   order: number;
   description?: string;
+  maintainers?: string[];
   introMarkdown?: string;
   introHtml?: string;
   bookmarks: EnrichedBookmark[];

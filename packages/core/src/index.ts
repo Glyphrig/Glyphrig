@@ -4,6 +4,8 @@ export * from './markdown/parse.js';
 export * from './markdown/serialize.js';
 export * from './safety/sanitize.js';
 export * from './safety/filter.js';
+export * from './rules/autotag.js';
+export * from './invite.js';
 export * from './sync/diff.js';
 export * from './sync/merge.js';
 export * from './sync/engine.js';

@@ -2,6 +2,8 @@ import YAML from 'yaml';
 import type { BookmarkEntry, BookmarkTree, FolderNode } from '../types.js';
 import {
   mergeBookmarkEntries,
+  mergeContributorNotes,
+  normalizeContributorNotes,
   normalizeUserList,
   type MarkdownBlock,
   type ParsedFolderDocument,
@@ -9,16 +11,50 @@ import {
 import { folderPathToFilePath, normalizeRepoRootDir } from './slug.js';
 
 function escapeMarkdownTitle(title: string): string {
-  return title.replace(/([\\[\]])/g, '\\$1');
+  return title.replace(/\s+/g, ' ').trim().replace(/([\\[\]])/g, '\\$1');
 }
 
 function sanitizeTag(tag: string): string {
-  return tag.trim().replace(/^#+/, '').toLowerCase();
+  return tag
+    .trim()
+    .replace(/^#+/, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9_./-]+/g, '-')
+    .replace(/\/+/g, '/')
+    .replace(/^[-/]+|[-/]+$/g, '');
+}
+
+function sanitizeCommentToken(raw: string): string {
+  return raw.trim().replace(/\s+/g, '').replace(/-->/g, '');
+}
+
+function formatMarkdownUrl(rawUrl: string): string {
+  const trimmed = rawUrl.trim();
+  let depth = 0;
+  let balanced = true;
+  for (const ch of trimmed) {
+    if (ch === '(') depth++;
+    else if (ch === ')') {
+      depth--;
+      if (depth < 0) {
+        balanced = false;
+        break;
+      }
+    }
+  }
+  if (depth !== 0) balanced = false;
+
+  if (!balanced || /\s/.test(trimmed)) {
+    const safe = trimmed.replace(/\s/g, '%20').replace(/</g, '%3C').replace(/>/g, '%3E');
+    return `<${safe}>`;
+  }
+  return trimmed;
 }
 
 export function formatBookmarkLine(entry: BookmarkEntry): string {
-  const safeTitle = escapeMarkdownTitle(entry.title.trim() || entry.url);
-  const parts: string[] = [`- [${safeTitle}](${entry.url.trim()})`];
+  const safeTitle = escapeMarkdownTitle(entry.title || entry.url);
+  const safeUrl = formatMarkdownUrl(entry.url);
+  const parts: string[] = [`- [${safeTitle}](${safeUrl})`];
 
   if (entry.note && entry.note.trim()) {
     parts.push(`— ${entry.note.trim().replace(/\s+/g, ' ')}`);
@@ -33,14 +69,20 @@ export function formatBookmarkLine(entry: BookmarkEntry): string {
 
   const metaParts: string[] = [];
   if (entry.added && entry.added.trim()) {
-    metaParts.push(`added=${entry.added.trim()}`);
+    const clean = sanitizeCommentToken(entry.added);
+    if (clean) metaParts.push(`added=${clean}`);
   }
   const cleanBy = normalizeUserList(entry.savedBy);
   if (cleanBy.length > 0) {
     metaParts.push(`by=${cleanBy.join(',')}`);
   }
   if (entry.archivedAt && entry.archivedAt.trim()) {
-    metaParts.push(`archived=${entry.archivedAt.trim()}`);
+    const clean = sanitizeCommentToken(entry.archivedAt);
+    if (clean) metaParts.push(`archived=${clean}`);
+  }
+  if (entry.archiveUrl && entry.archiveUrl.trim()) {
+    const clean = sanitizeCommentToken(entry.archiveUrl);
+    if (clean) metaParts.push(`archive=${clean}`);
   }
   if (metaParts.length > 0) {
     parts.push(`<!-- glyphrig: ${metaParts.join(' ')} -->`);
@@ -49,23 +91,41 @@ export function formatBookmarkLine(entry: BookmarkEntry): string {
   return parts.join(' ');
 }
 
+export function formatBookmarkLines(entry: BookmarkEntry): string[] {
+  const lines = [formatBookmarkLine(entry)];
+  const notes = normalizeContributorNotes(entry.contributorNotes);
+  if (notes) {
+    for (const [user, text] of Object.entries(notes)) {
+      lines.push(`  - **@${user}**: ${text}`);
+    }
+  }
+  return lines;
+}
+
 function buildFrontmatter(
   folder: FolderNode,
   existingDoc?: ParsedFolderDocument,
 ): string {
-  const fm: Record<string, unknown> = {
-    title: folder.title,
-    order: folder.order,
-  };
-  if (folder.description !== undefined && folder.description !== '') {
-    fm.description = folder.description;
-  }
+  const fm: Record<string, unknown> = {};
   if (existingDoc) {
     for (const [key, value] of Object.entries(existingDoc.extraFrontmatter)) {
       if (value !== undefined) {
         fm[key] = value;
       }
     }
+  }
+  fm.title = folder.title;
+  fm.order = folder.order;
+  if (folder.description !== undefined && folder.description !== '') {
+    fm.description = folder.description;
+  } else {
+    delete fm.description;
+  }
+  const maintainers = normalizeUserList(folder.maintainers);
+  if (maintainers.length > 0) {
+    fm.maintainers = maintainers;
+  } else {
+    delete fm.maintainers;
   }
   const yamlBody = YAML.stringify(fm, { lineWidth: 0 }).trimEnd();
   return `---\n${yamlBody}\n---`;
@@ -78,13 +138,21 @@ function mergeBookmarkMetadata(
   if (!existing) {
     return incoming;
   }
+  const contributorNotes = mergeContributorNotes(
+    existing.contributorNotes,
+    incoming.contributorNotes,
+  );
+  const archiveUrl = incoming.archiveUrl ?? existing.archiveUrl;
+  const mergedTags = [...new Set([...existing.tags, ...incoming.tags])];
   return {
     ...incoming,
     note: incoming.note !== undefined ? incoming.note : existing.note,
-    tags: incoming.tags.length > 0 ? incoming.tags : existing.tags,
+    ...(contributorNotes ? { contributorNotes } : {}),
+    tags: mergedTags,
     added: incoming.added !== undefined ? incoming.added : existing.added,
     savedBy: incoming.savedBy !== undefined ? incoming.savedBy : existing.savedBy,
     archivedAt: incoming.archivedAt !== undefined ? incoming.archivedAt : existing.archivedAt,
+    ...(archiveUrl ? { archiveUrl } : {}),
   };
 }
 
@@ -132,13 +200,15 @@ function collapseExcessBlankLines(lines: string[]): string[] {
 export function serializeFolderMarkdown(
   folder: FolderNode,
   existingDoc?: ParsedFolderDocument,
+  options: { preserveExistingMetadata?: boolean } = {},
 ): string {
+  const preserveExistingMetadata = options.preserveExistingMetadata ?? true;
   const frontmatter = buildFrontmatter(folder, existingDoc);
   const sortedBookmarks = [...folder.bookmarks].sort((a, b) => a.order - b.order);
 
   // Build queue of existing bookmarks by normalizedUrl to carry over rich metadata
   const existingByUrl = new Map<string, BookmarkEntry[]>();
-  if (existingDoc) {
+  if (preserveExistingMetadata && existingDoc) {
     for (const item of existingDoc.bookmarks) {
       const list = existingByUrl.get(item.normalizedUrl) ?? [];
       list.push(item);
@@ -147,6 +217,7 @@ export function serializeFolderMarkdown(
   }
 
   const enrichedBookmarks = sortedBookmarks.map((bm) => {
+    if (!preserveExistingMetadata) return bm;
     const matches = existingByUrl.get(bm.normalizedUrl);
     const matched = matches && matches.length > 0 ? matches.shift() : undefined;
     return mergeBookmarkMetadata(bm, matched);
@@ -163,7 +234,7 @@ export function serializeFolderMarkdown(
       }
     }
     for (const bm of enrichedBookmarks) {
-      bodyLines.push(formatBookmarkLine(bm));
+      bodyLines.push(...formatBookmarkLines(bm));
     }
   } else if (hasInterspersedProseBetweenBookmarks(existingDoc.blocks)) {
     // Hand-grouped sections exist: update matching bookmarks in place and append new ones
@@ -185,7 +256,7 @@ export function serializeFolderMarkdown(
       const list = remainingByUrl.get(block.entry.normalizedUrl);
       const nextBm = list && list.length > 0 ? list.shift() : undefined;
       if (nextBm) {
-        bodyLines.push(formatBookmarkLine(nextBm));
+        bodyLines.push(...formatBookmarkLines(nextBm));
         lastBookmarkOutIdx = bodyLines.length - 1;
       }
     }
@@ -195,7 +266,7 @@ export function serializeFolderMarkdown(
       const remaining = remainingByUrl.get(bm.normalizedUrl);
       if (remaining && remaining.length > 0 && remaining[0] === bm) {
         remaining.shift();
-        unplaced.push(formatBookmarkLine(bm));
+        unplaced.push(...formatBookmarkLines(bm));
       }
     }
 
@@ -238,7 +309,7 @@ export function serializeFolderMarkdown(
       bodyLines.push('');
     }
     for (const bm of enrichedBookmarks) {
-      bodyLines.push(formatBookmarkLine(bm));
+      bodyLines.push(...formatBookmarkLines(bm));
     }
     if (cleanAfter.length > 0) {
       if (enrichedBookmarks.length > 0) {
@@ -259,6 +330,7 @@ export function serializeBookmarkTree(
   tree: BookmarkTree,
   rootDir = 'bookmarks',
   existingDocs?: Map<string, ParsedFolderDocument>,
+  options: { preserveExistingMetadata?: boolean } = {},
 ): Map<string, string> {
   const cleanRoot = normalizeRepoRootDir(rootDir);
   const files = new Map<string, string>();
@@ -266,7 +338,7 @@ export function serializeBookmarkTree(
   function walk(folder: FolderNode): void {
     const filePath = folderPathToFilePath(cleanRoot, folder.path);
     const existing = existingDocs?.get(folder.path);
-    files.set(filePath, serializeFolderMarkdown(folder, existing));
+    files.set(filePath, serializeFolderMarkdown(folder, existing, options));
 
     const sortedChildren = [...folder.children].sort((a, b) => {
       if (a.order !== b.order) return a.order - b.order;
@@ -337,9 +409,9 @@ export function serializeArchiveDocument(
   });
 
   const fm: Record<string, unknown> = {
+    ...(existingDoc?.extraFrontmatter ?? {}),
     title: `${folderTitle} (Archived)`,
     archived: true,
-    ...(existingDoc?.extraFrontmatter ?? {}),
   };
   delete fm.order;
   const frontmatter = `---\n${YAML.stringify(fm, { lineWidth: 0 }).trimEnd()}\n---`;
@@ -362,7 +434,7 @@ export function serializeArchiveDocument(
   if (deduped.length > 0) {
     bodyParts.push('');
     for (const item of deduped) {
-      bodyParts.push(formatBookmarkLine(item));
+      bodyParts.push(...formatBookmarkLines(item));
     }
   }
 

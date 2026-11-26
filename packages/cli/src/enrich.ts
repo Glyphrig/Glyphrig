@@ -44,21 +44,22 @@ const MAX_FAVICON_BYTES = 64 * 1024;
 const ERROR_TTL_MS = 3 * 24 * 60 * 60 * 1000;
 const USER_AGENT = 'GlyphrigBot/0.1 (+https://github.com/Glyphrig/Glyphrig)';
 
+function safeFromCodePoint(code: number): string {
+  if (!Number.isFinite(code) || code < 0 || code > 0x10ffff || (code >= 0xd800 && code <= 0xdfff)) {
+    return '';
+  }
+  return String.fromCodePoint(code);
+}
+
 function decodeHtmlEntities(input: string): string {
   return input
-    .replace(/&amp;/gi, '&')
     .replace(/&lt;/gi, '<')
     .replace(/&gt;/gi, '>')
     .replace(/&quot;/gi, '"')
     .replace(/&#39;|&apos;/gi, "'")
-    .replace(/&#x([0-9a-f]+);/gi, (_m, hex: string) => {
-      const code = Number.parseInt(hex, 16);
-      return Number.isFinite(code) ? String.fromCodePoint(code) : '';
-    })
-    .replace(/&#(\d+);/g, (_m, dec: string) => {
-      const code = Number.parseInt(dec, 10);
-      return Number.isFinite(code) ? String.fromCodePoint(code) : '';
-    });
+    .replace(/&#x([0-9a-f]+);/gi, (_m, hex: string) => safeFromCodePoint(Number.parseInt(hex, 16)))
+    .replace(/&#(\d+);/g, (_m, dec: string) => safeFromCodePoint(Number.parseInt(dec, 10)))
+    .replace(/&amp;/gi, '&');
 }
 
 function parseAttributes(tag: string): Record<string, string> {
@@ -252,6 +253,74 @@ function guessIconExtension(contentType: string, iconUrl: string): string | null
   return null;
 }
 
+/**
+ * Fail-closed validator/sanitizer for SVG favicons served from dist/favicons/.
+ * Rejects any SVG containing active scripting, foreignObject, SMIL animation,
+ * event handlers, DTD entity declarations, xml-stylesheet PIs, or non-fragment
+ * hrefs so an untrusted bookmarked site cannot plant same-origin stored XSS.
+ */
+export function sanitizeSvgFavicon(bytes: Uint8Array): Uint8Array | null {
+  let text = new TextDecoder('utf-8', { fatal: false }).decode(bytes);
+  // Strip UTF-8 BOM and NUL bytes
+  text = text.replace(/^\uFEFF/, '').replace(/\u0000/g, '').trim();
+  if (!text) return null;
+
+  // Reject DTD internal subsets, entity declarations, and non-xml processing instructions (e.g. <?xml-stylesheet?>)
+  if (/<!\s*entity\b/i.test(text) || /<!\s*doctype[^>]*\[/i.test(text)) {
+    return null;
+  }
+  if (/<\?(?!xml(?:\s|$))/i.test(text)) {
+    return null;
+  }
+
+  // Strip benign XML declaration, comments, and entity-free DOCTYPE to check root element
+  const stripped = text
+    .replace(/<\?xml[\s\S]*?\?>/gi, '')
+    .replace(/<!--[\s\S]*?-->/g, '')
+    .replace(/<!\s*doctype\s+svg\b[^>]*>/gi, '')
+    .trim();
+
+  if (!/^<svg(?:\s|>)/i.test(stripped) || !/<\/svg>\s*$/i.test(stripped)) {
+    return null;
+  }
+
+  // Reject dangerous elements (script, foreignObject, embedded objects, links, SMIL)
+  if (
+    /<\s*(?:[a-z0-9_-]+:)?(?:script|foreignobject|iframe|object|embed|applet|meta|link|base|a|animate|animatemotion|animatetransform|set|handler|listener|audio|video)\b/i.test(
+      stripped,
+    )
+  ) {
+    return null;
+  }
+
+  // Reject inline event handlers (onload=, onerror=, onclick=, etc.)
+  if (/(?:^|[\s/"'])on[a-z]{2,}\s*=/i.test(stripped)) {
+    return null;
+  }
+
+  // Reject dangerous URI schemes, CSS @import / expression(), and CDATA smuggling
+  if (
+    /<!\[cdata\[/i.test(stripped) ||
+    /(?:javascript|vbscript)\s*:/i.test(stripped) ||
+    /data\s*:\s*(?:text\/html|image\/svg\+xml|application\/)/i.test(stripped) ||
+    /@import\b/i.test(stripped) ||
+    /expression\s*\(/i.test(stripped)
+  ) {
+    return null;
+  }
+
+  // Reject any href / xlink:href / src attribute that does not reference a local #id fragment
+  const refAttrRegex = /\b(?:(?:xlink:)?href|src)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))/gi;
+  for (const match of stripped.matchAll(refAttrRegex)) {
+    const val = (match[1] ?? match[2] ?? match[3] ?? '').trim();
+    if (!val.startsWith('#')) {
+      return null;
+    }
+  }
+
+  return new TextEncoder().encode(stripped);
+}
+
 function isUrlAllowedForFetch(url: string, allowPrivateForTest: boolean): boolean {
   if (allowPrivateForTest) {
     try {
@@ -266,6 +335,39 @@ function isUrlAllowedForFetch(url: string, allowPrivateForTest: boolean): boolea
     filterCredentials: true,
     stripTrackingParams: false,
   }).allowed;
+}
+
+async function fetchWithSafeRedirects(
+  startUrl: string,
+  init: RequestInit,
+  allowPrivateForTest: boolean,
+  maxRedirects = 5,
+): Promise<{ res: Response; finalUrl: string } | null> {
+  let currentUrl = startUrl;
+  for (let hop = 0; hop <= maxRedirects; hop++) {
+    if (!isUrlAllowedForFetch(currentUrl, allowPrivateForTest)) {
+      return null;
+    }
+    const res = await fetch(currentUrl, {
+      ...init,
+      redirect: 'manual',
+    });
+    if (res.status >= 300 && res.status < 400) {
+      const location = res.headers.get('location');
+      await res.body?.cancel().catch(() => {});
+      if (!location || hop === maxRedirects) {
+        return null;
+      }
+      try {
+        currentUrl = new URL(location, currentUrl).toString();
+      } catch {
+        return null;
+      }
+      continue;
+    }
+    return { res, finalUrl: currentUrl };
+  }
+  return null;
 }
 
 async function downloadFavicon(
@@ -288,21 +390,36 @@ async function downloadFavicon(
       continue;
     }
     try {
-      const res = await fetch(candidate, {
-        headers: { 'User-Agent': USER_AGENT },
-        signal: AbortSignal.timeout(timeoutMs),
-        redirect: 'follow',
-      });
-      if (!res.ok) continue;
-      const finalUrl = res.url || candidate;
-      if (!isUrlAllowedForFetch(finalUrl, allowPrivateForTest)) continue;
+      const fetched = await fetchWithSafeRedirects(
+        candidate,
+        {
+          headers: { 'User-Agent': USER_AGENT },
+          signal: AbortSignal.timeout(timeoutMs),
+        },
+        allowPrivateForTest,
+      );
+      if (!fetched) continue;
+      const { res, finalUrl } = fetched;
+      if (!res.ok) {
+        await res.body?.cancel().catch(() => {});
+        continue;
+      }
 
       const contentType = res.headers.get('content-type') ?? '';
       const ext = guessIconExtension(contentType, finalUrl);
-      if (!ext) continue;
+      if (!ext) {
+        await res.body?.cancel().catch(() => {});
+        continue;
+      }
 
-      const bytes = await readBodyLimited(res, MAX_FAVICON_BYTES);
+      let bytes = await readBodyLimited(res, MAX_FAVICON_BYTES);
       if (!bytes || bytes.byteLength === 0) continue;
+
+      if (ext === 'svg') {
+        const sanitized = sanitizeSvgFavicon(bytes);
+        if (!sanitized) continue;
+        bytes = sanitized;
+      }
 
       const fileName = `${hashPrefix}.${ext}`;
       await fs.writeFile(path.join(faviconsDir, fileName), bytes);
@@ -390,17 +507,20 @@ export async function enrichBookmarks(
   await mapWithConcurrency(toFetch, options.concurrency, async (url) => {
     const fetchedAt = Date.now();
     try {
-      const res = await fetch(url, {
-        headers: {
-          'User-Agent': USER_AGENT,
-          Accept: 'text/html,application/xhtml+xml;q=0.9,*/*;q=0.1',
+      const fetched = await fetchWithSafeRedirects(
+        url,
+        {
+          headers: {
+            'User-Agent': USER_AGENT,
+            Accept: 'text/html,application/xhtml+xml;q=0.9,*/*;q=0.1',
+          },
+          signal: AbortSignal.timeout(options.timeoutMs),
         },
-        signal: AbortSignal.timeout(options.timeoutMs),
-        redirect: 'follow',
-      });
+        allowPrivate,
+      );
 
-      const finalUrl = res.url || url;
-      if (!res.ok || !isUrlAllowedForFetch(finalUrl, allowPrivate)) {
+      if (!fetched || !fetched.res.ok) {
+        if (fetched) await fetched.res.body?.cancel().catch(() => {});
         const entry: EnrichedUrlMeta = { url, status: 'error', fetchedAt };
         cache.entries[url] = entry;
         metadata.set(url, entry);
@@ -408,10 +528,13 @@ export async function enrichBookmarks(
         return;
       }
 
+      const { res, finalUrl } = fetched;
+
       const contentType = (res.headers.get('content-type') ?? '').toLowerCase();
       const isHtml =
         contentType.includes('text/html') || contentType.includes('application/xhtml+xml');
       if (!isHtml) {
+        await res.body?.cancel().catch(() => {});
         const entry: EnrichedUrlMeta = { url, status: 'ok', fetchedAt };
         cache.entries[url] = entry;
         metadata.set(url, entry);

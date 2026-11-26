@@ -789,3 +789,214 @@ dialog.glyphrig-dialog::backdrop {
   color: var(--accent);
   text-decoration: underline;
 }
+
+/* Collaboration Suite Additions */
+.bm-contributor-notes {
+  list-style: none;
+  margin: 0.45rem 0 0;
+  padding: 0.45rem 0.65rem;
+  background: var(--surface-muted);
+  border-left: 2px solid var(--accent);
+  border-radius: 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  font-size: 0.84rem;
+  color: var(--ink);
+}
+
+.bm-contributor-note {
+  line-height: 1.4;
+}
+
+.bm-note-author {
+  font-family: var(--font-mono);
+  font-weight: 600;
+  font-size: 0.78rem;
+  color: var(--accent);
+  text-decoration: none;
+}
+
+.bm-note-author:hover {
+  text-decoration: underline;
+}
+
+.bm-dead-badge {
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  padding: 0.1rem 0.42rem;
+  border-radius: 5px;
+  background: color-mix(in srgb, #dc2626 12%, transparent);
+  border: 1px solid color-mix(in srgb, #dc2626 35%, transparent);
+  color: #dc2626;
+}
+
+.bm-archive-link {
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  padding: 0.1rem 0.45rem;
+  border-radius: 5px;
+  background: var(--surface-muted);
+  border: 1px solid var(--border);
+  color: var(--ink-muted);
+  text-decoration: none;
+}
+
+.bm-archive-link:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.bm-new-badge {
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  font-weight: 700;
+  padding: 0.08rem 0.42rem;
+  border-radius: 999px;
+  background: var(--accent);
+  color: #ffffff;
+}
+
+.bookmark-item.is-new-since-visit {
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
+}
+
+.page-header-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+
+.feed-pill {
+  font-family: var(--font-mono);
+  font-size: 0.74rem;
+  padding: 0.22rem 0.55rem;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--ink-muted);
+  text-decoration: none;
+}
+
+.feed-pill:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.folder-maintainers {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin-top: 0.45rem;
+  font-size: 0.82rem;
+  color: var(--ink-muted);
+}
+
+.sidebar-actions {
+  display: flex;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+  margin-top: auto;
+  padding-top: 0.75rem;
+}
+
+.sidebar-action-btn {
+  flex: 1 1 auto;
+  justify-content: center;
+  font-size: 0.78rem;
+  padding: 0.35rem 0.6rem;
+}
+
+.join-copy-row {
+  display: flex;
+  gap: 0.45rem;
+  align-items: center;
+}
+
+.join-copy-row input {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+}
+
+.join-feeds-row {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  margin-top: 0.85rem;
+  padding-top: 0.75rem;
+  border-top: 1px solid var(--border);
+}
+
+.qa-dup-banner {
+  margin: 0.35rem 0 0;
+  padding: 0.45rem 0.65rem;
+  border-radius: 6px;
+  font-size: 0.82rem;
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent) 40%, transparent);
+  color: var(--ink);
+}
+
+.qa-checkbox {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.84rem;
+  margin: 0.55rem 0;
+  cursor: pointer;
+}
+
+.qa-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-top: 0.65rem;
+}
+
+.qa-tools {
+  margin-top: 0.9rem;
+  padding-top: 0.75rem;
+  border-top: 1px solid var(--border);
+  font-size: 0.82rem;
+}
+
+.qa-tools summary {
+  cursor: pointer;
+  font-weight: 600;
+  color: var(--ink-muted);
+}
+
+.qa-tools-body {
+  margin-top: 0.5rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.recent-new-banner {
+  margin: 0.45rem 0 0;
+  padding: 0.4rem 0.7rem;
+  border-radius: 6px;
+  font-size: 0.85rem;
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent) 35%, transparent);
+  color: var(--ink);
+}
+
+.contributor-filter-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin-bottom: 0.75rem;
+}
+
+.contributor-filter-bar .pill-btn.is-active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #ffffff;
+}

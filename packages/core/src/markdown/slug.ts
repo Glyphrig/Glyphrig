@@ -10,12 +10,20 @@ export function slugifyFolderName(title: string): string {
 }
 
 export function assignSiblingSlugs(titles: string[]): string[] {
-  const counts = new Map<string, number>();
+  const used = new Set<string>();
   return titles.map((title) => {
     const base = slugifyFolderName(title);
-    const seen = counts.get(base) ?? 0;
-    counts.set(base, seen + 1);
-    return seen === 0 ? base : `${base}-${seen + 1}`;
+    if (!used.has(base)) {
+      used.add(base);
+      return base;
+    }
+    let suffix = 2;
+    while (used.has(`${base}-${suffix}`)) {
+      suffix++;
+    }
+    const unique = `${base}-${suffix}`;
+    used.add(unique);
+    return unique;
   });
 }
 

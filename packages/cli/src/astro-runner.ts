@@ -7,6 +7,7 @@ import { build as astroBuild, dev as astroDev } from 'astro';
 import * as pagefind from 'pagefind';
 import { loadGlyphrigConfig } from './config.js';
 import { enrichBookmarks, type EnrichStats } from './enrich.js';
+import { loadLinkHealthCache } from './link-health.js';
 import { buildEnrichedSiteTree, readBookmarkDirectory } from './loader.js';
 import { generateServiceWorkerScript } from './sw-generator.js';
 import { applyBasePlaceholder, resolveTheme, type ResolvedTheme } from './theme.js';
@@ -44,6 +45,65 @@ export interface BuildSiteResult {
   enrichStats: EnrichStats;
   config: SiteConfig;
   themeName: string;
+}
+
+function guessMimeType(filePath: string): string {
+  switch (path.extname(filePath).toLowerCase()) {
+    case '.svg':
+      return 'image/svg+xml';
+    case '.png':
+      return 'image/png';
+    case '.ico':
+      return 'image/x-icon';
+    case '.webp':
+      return 'image/webp';
+    case '.jpg':
+    case '.jpeg':
+      return 'image/jpeg';
+    case '.gif':
+      return 'image/gif';
+    case '.css':
+      return 'text/css; charset=utf-8';
+    case '.js':
+      return 'application/javascript; charset=utf-8';
+    case '.json':
+      return 'application/json; charset=utf-8';
+    case '.woff2':
+      return 'font/woff2';
+    case '.woff':
+      return 'font/woff';
+    default:
+      return 'application/octet-stream';
+  }
+}
+
+function safeDecodeUriPath(raw: string): string | null {
+  try {
+    return decodeURIComponent(raw);
+  } catch {
+    return null;
+  }
+}
+
+function assertSafeOutDir(
+  outDir: string,
+  protectedPaths: Array<{ label: string; dir: string }>,
+): void {
+  const resolvedOut = path.resolve(outDir);
+  if (resolvedOut === path.parse(resolvedOut).root) {
+    throw new Error(`Refusing to clear filesystem root as output directory: ${resolvedOut}`);
+  }
+  for (const item of protectedPaths) {
+    const resolvedTarget = path.resolve(item.dir);
+    if (
+      resolvedOut === resolvedTarget ||
+      resolvedTarget.startsWith(resolvedOut + path.sep)
+    ) {
+      throw new Error(
+        `Refusing to delete "${resolvedOut}" because it overlaps ${item.label} ("${resolvedTarget}"). Choose a dedicated --out directory.`,
+      );
+    }
+  }
 }
 
 async function exists(filePath: string): Promise<boolean> {
@@ -126,9 +186,13 @@ async function prepareSiteData(options: {
     allowPrivateUrlsForTest: options.allowPrivateUrlsForTest,
   });
 
+  const linkHealthByUrl = await loadLinkHealthCache(options.cacheDir);
+
   const builtTree = buildEnrichedSiteTree(tree, enrichResult.metadata, {
     fetchOgImage: config.enrichment.fetchOgImage,
     autoTags: config.enrichment.autoTags,
+    autoTagRules: config.enrichment.autoTagRules,
+    linkHealthByUrl,
   });
 
   let customCssContent: string | undefined;
@@ -175,7 +239,9 @@ async function prepareSiteData(options: {
     cssParts.push(resolvedTheme.cssContent);
   }
   if (themeExplicit.accent) {
-    cssParts.push(`:root {\n  --accent: ${config.theme.accent};\n}`);
+    cssParts.push(
+      `:root, html[data-theme='dark'], html[data-theme='light'] {\n  --accent: ${config.theme.accent};\n}`,
+    );
   }
   if (customCssContent) {
     cssParts.push(customCssContent);
@@ -287,23 +353,29 @@ function createVirtualDataPlugin(
           return;
         }
         if (rel.startsWith('favicons/')) {
-          const safeName = path.basename(rel);
-          fs.readFile(path.join(devPaths.cacheDir, 'favicons', safeName))
+          const decoded = safeDecodeUriPath(rel);
+          if (!decoded) return next();
+          const safeName = path.basename(decoded);
+          const target = path.join(devPaths.cacheDir, 'favicons', safeName);
+          fs.readFile(target)
             .then((buf) => {
               res.statusCode = 200;
+              res.setHeader('Content-Type', guessMimeType(target));
               res.end(buf);
             })
             .catch(() => next());
           return;
         }
         if (rel.startsWith('assets/')) {
-          const sub = rel.slice('assets/'.length);
-          const candidate = path.resolve(devPaths.cwd, 'assets', sub);
+          const decoded = safeDecodeUriPath(rel.slice('assets/'.length));
+          if (!decoded) return next();
+          const candidate = path.resolve(devPaths.cwd, 'assets', decoded);
           const assetsRoot = path.resolve(devPaths.cwd, 'assets');
           if (candidate.startsWith(assetsRoot + path.sep)) {
             fs.readFile(candidate)
               .then((buf) => {
                 res.statusCode = 200;
+                res.setHeader('Content-Type', guessMimeType(candidate));
                 res.end(buf);
               })
               .catch(() => next());
@@ -311,13 +383,15 @@ function createVirtualDataPlugin(
           }
         }
         if (devPaths.themeAssetsDir && rel.startsWith('theme-assets/')) {
-          const sub = rel.slice('theme-assets/'.length);
+          const decoded = safeDecodeUriPath(rel.slice('theme-assets/'.length));
+          if (!decoded) return next();
           const themeAssetsRoot = path.resolve(devPaths.themeAssetsDir);
-          const candidate = path.resolve(themeAssetsRoot, sub);
+          const candidate = path.resolve(themeAssetsRoot, decoded);
           if (candidate.startsWith(themeAssetsRoot + path.sep)) {
             fs.readFile(candidate)
               .then((buf) => {
                 res.statusCode = 200;
+                res.setHeader('Content-Type', guessMimeType(candidate));
                 res.end(buf);
               })
               .catch(() => next());
@@ -346,6 +420,12 @@ export async function buildSite(options: BuildSiteOptions = {}): Promise<BuildSi
     noEnrich: options.noEnrich,
     allowPrivateUrlsForTest: options.allowPrivateUrlsForTest,
   });
+
+  assertSafeOutDir(outDir, [
+    { label: 'working directory', dir: cwd },
+    { label: 'bookmarks input directory', dir: inputDir },
+    { label: 'cache directory', dir: cacheDir },
+  ]);
 
   await fs.rm(outDir, { recursive: true, force: true });
   await fs.mkdir(outDir, { recursive: true });

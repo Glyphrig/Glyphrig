@@ -44,6 +44,21 @@
             </div>
             <ul id="profile-list" class="profile-list"></ul>
             <hr style="border: 0; border-top: 1px solid var(--border, #e5e7eb); margin: 14px 0;" />
+            <div class="join-box">
+              <label for="input-join-garden" class="small" style="font-weight: 600;">
+                Join a Shared Garden (1-Click)
+              </label>
+              <input
+                id="input-join-garden"
+                type="text"
+                placeholder="Paste glyphrig-invite:... or site/glyphrig.json URL"
+              />
+              <button type="button" class="btn-secondary btn-sm" id="btn-join-garden">
+                Load Garden Invite
+              </button>
+              <p id="join-garden-status" class="small muted"></p>
+            </div>
+            <hr style="border: 0; border-top: 1px solid var(--border, #e5e7eb); margin: 14px 0;" />
             <div class="row-gap wrap">
               <button type="button" class="btn-secondary btn-sm" id="btn-export-config">
                 Export Backup
@@ -195,7 +210,9 @@
                 <label for="f-syncmode">Sync Mode</label>
                 <select id="f-syncmode">
                   <option value="two-way">Two-way sync (mirror shared repo &lt;-&gt; browser folder)</option>
-                  <option value="contribute-only">Contribute-only (push my bookmarks &amp; attribution; never pull others into my browser)</option>
+                  <option value="contribute-only">Contribute-only (push my bookmarks &amp; attribution; never pull others)</option>
+                  <option value="subscribe-only">Subscribe-only (read-only follow — no token needed for public repos)</option>
+                  <option value="propose-pr">Propose via Pull Request (push to branch/fork &amp; open PR for review)</option>
                 </select>
               </div>
               <label class="checkbox-row">
@@ -290,6 +307,20 @@
             <button type="button" class="btn-primary" id="btn-save-oauth-id">Save Client ID</button>
             <span id="oauth-save-status" class="small"></span>
           </div>
+        </div>
+
+        <div class="card" style="margin-top: 14px;">
+          <h2>Live Team Page Indicator (Optional)</h2>
+          <p class="muted small">
+            Show a subtle toolbar badge count whenever you visit a web page that teammates have
+            already bookmarked in your synced gardens. Matching runs 100% locally against your
+            cached sync snapshots — zero network requests or browsing telemetry.
+          </p>
+          <label class="checkbox-row" style="margin-top: 8px;">
+            <input id="opt-live-badge" type="checkbox" />
+            <span>Enable live toolbar badge while browsing (requests optional browser <code>tabs</code> permission)</span>
+          </label>
+          <p id="live-badge-status" class="small muted"></p>
         </div>
       </section>
     </div>

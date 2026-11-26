@@ -10,8 +10,17 @@ export default defineConfig({
   manifest: ({ browser }) => ({
     name: 'Glyphrig',
     description:
-      'Two-way sync a chosen bookmark folder with a Git repository (GitHub, GitLab, Forgejo/Codeberg) to publish a static bookmark site.',
-    permissions: ['bookmarks', 'storage', 'alarms'],
+      'Git-backed bookmark sync with team notes, PR proposals, read-only garden subscriptions, and public safety rails.',
+    permissions: ['bookmarks', 'storage', 'alarms', 'activeTab', 'contextMenus'],
+    optional_permissions: ['tabs'],
+    commands: {
+      _execute_action: {
+        suggested_key: {
+          default: 'Alt+Shift+B',
+        },
+        description: 'Open Glyphrig Quick Save & Team Notes for current tab',
+      },
+    },
     host_permissions: [
       'https://api.github.com/*',
       'https://github.com/*',
@@ -30,13 +39,10 @@ export default defineConfig({
           browser_specific_settings: {
             gecko: {
               id: 'glyphrig@glyphrig.dev',
-              strict_min_version: '128.0',
+              strict_min_version: '140.0',
               data_collection_permissions: {
                 required: ['none'],
               },
-            },
-            gecko_android: {
-              strict_min_version: '128.0',
             },
           },
         }

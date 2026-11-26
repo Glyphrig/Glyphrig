@@ -1,6 +1,7 @@
 import { generateId } from '../forge/encoding.js';
 import {
   mergeBookmarkEntries,
+  mergeContributorNotes,
   normalizeUserList,
   normalizeUsername,
 } from '../markdown/parse.js';
@@ -74,6 +75,9 @@ function carryOverRichMetadata(
       ...preferred,
       tags: [...preferred.tags],
       ...(preferred.savedBy ? { savedBy: [...preferred.savedBy] } : {}),
+      ...(preferred.contributorNotes
+        ? { contributorNotes: { ...preferred.contributorNotes } }
+        : {}),
     };
   }
   const savedBy =
@@ -82,10 +86,18 @@ function carryOverRichMetadata(
       : preserveSavedByFromFallback && fallback.savedBy !== undefined
         ? [...fallback.savedBy]
         : undefined;
+  const contributorNotes = mergeContributorNotes(
+    fallback.contributorNotes,
+    preferred.contributorNotes,
+  );
+  const archiveUrl = preferred.archiveUrl ?? fallback.archiveUrl;
+  const mergedTags = [...new Set([...fallback.tags, ...preferred.tags])];
   return {
     ...preferred,
     note: preferred.note !== undefined ? preferred.note : fallback.note,
-    tags: preferred.tags.length > 0 ? [...preferred.tags] : [...fallback.tags],
+    ...(contributorNotes ? { contributorNotes } : {}),
+    ...(archiveUrl ? { archiveUrl } : {}),
+    tags: mergedTags,
     added: preferred.added !== undefined ? preferred.added : fallback.added,
     ...(savedBy && savedBy.length > 0 ? { savedBy } : {}),
   };
@@ -105,7 +117,8 @@ function areBrowserVisibleEqual(a: BookmarkTree, b: BookmarkTree): boolean {
   function normFolder(folder: FolderNode): unknown {
     return {
       path: folder.path,
-      title: folder.title,
+      // Root container folder title is owned by the browser locally and never renamed by applyTreeToBrowser
+      ...(folder.path ? { title: folder.title } : {}),
       bookmarks: [...folder.bookmarks]
         .sort((x, y) => x.order - y.order)
         .map((bm) => ({ title: bm.title, url: bm.url })),
@@ -128,11 +141,24 @@ function removeUserOrArchive(
   if (currentUser && entry.savedBy && entry.savedBy.length > 0) {
     const remaining = entry.savedBy.filter((u) => u !== currentUser);
     if (remaining.length > 0) {
-      return {
+      let nextNotes = entry.contributorNotes ? { ...entry.contributorNotes } : undefined;
+      if (nextNotes && currentUser in nextNotes) {
+        delete nextNotes[currentUser];
+        if (Object.keys(nextNotes).length === 0) {
+          nextNotes = undefined;
+        }
+      }
+      const next: BookmarkEntry = {
         ...entry,
         tags: [...entry.tags],
         savedBy: remaining,
       };
+      if (nextNotes) {
+        next.contributorNotes = nextNotes;
+      } else {
+        delete next.contributorNotes;
+      }
+      return next;
     }
   }
 
@@ -244,6 +270,10 @@ function buildMergedFolderTree(
     } else if (isInitialUnion) {
       title = r?.title ?? l?.title ?? defaultTitleFromPath(path);
       order = r?.order ?? l?.order ?? 0;
+    } else if (!path && r) {
+      // Root folder title in remote bookmarks/README.md is authoritative (local browser root name is never renamed)
+      title = r.title;
+      order = r.order;
     } else if (b && l && r) {
       const localTitleChanged = l.title !== b.title;
       const remoteTitleChanged = r.title !== b.title;
@@ -257,6 +287,10 @@ function buildMergedFolderTree(
             resolution: 'remote-won',
             localSummary: l.title,
             remoteSummary: r.title,
+            localTitle: l.title,
+            remoteTitle: r.title,
+            localFolderPath: path,
+            remoteFolderPath: path,
           }),
         );
       } else if (localTitleChanged && !remoteTitleChanged) {
@@ -273,8 +307,10 @@ function buildMergedFolderTree(
       order = r?.order ?? l?.order ?? b?.order ?? 0;
     }
 
-    const description = r?.description ?? b?.description ?? l?.description;
-    const introMarkdown = r?.introMarkdown ?? b?.introMarkdown ?? l?.introMarkdown;
+    // When remote folder exists, treat its Markdown metadata as authoritative so manual deletions aren't resurrected
+    const description = r ? r.description : (b?.description ?? l?.description);
+    const maintainers = r ? r.maintainers : (b?.maintainers ?? l?.maintainers);
+    const introMarkdown = r ? r.introMarkdown : (b?.introMarkdown ?? l?.introMarkdown);
     const rawBookmarks = folderBookmarks.get(path) ?? [];
     const normalizedBookmarks = [...rawBookmarks]
       .sort((a, bItem) => a.order - bItem.order)
@@ -287,6 +323,7 @@ function buildMergedFolderTree(
       title,
       order,
       ...(description !== undefined ? { description } : {}),
+      ...(maintainers && maintainers.length > 0 ? { maintainers: [...maintainers] } : {}),
       ...(introMarkdown !== undefined ? { introMarkdown } : {}),
       bookmarks: normalizedBookmarks,
       children: [],
@@ -364,12 +401,38 @@ function mergeContributeOnly(
   const unsaveFromFolder = (
     folderPath: string,
     normUrl: string,
-  ): BookmarkEntry | undefined => {
+    archiveIfLast = true,
+  ): { entry: BookmarkEntry; otherSaversRemain: boolean } | undefined => {
     const list = folderBookmarks.get(folderPath);
     if (!list) return undefined;
     const idx = list.findIndex((item) => item.normalizedUrl === normUrl);
     if (idx === -1) return undefined;
     const target = list[idx]!;
+    if (!archiveIfLast) {
+      const remaining =
+        currentUser && target.savedBy
+          ? target.savedBy.filter((u) => u !== currentUser)
+          : [];
+      if (remaining.length > 0) {
+        let nextNotes = target.contributorNotes ? { ...target.contributorNotes } : undefined;
+        if (nextNotes && currentUser && currentUser in nextNotes) {
+          delete nextNotes[currentUser];
+          if (Object.keys(nextNotes).length === 0) nextNotes = undefined;
+        }
+        const updated: BookmarkEntry = {
+          ...target,
+          tags: [...target.tags],
+          savedBy: remaining,
+        };
+        if (nextNotes) updated.contributorNotes = nextNotes;
+        else delete updated.contributorNotes;
+        list[idx] = updated;
+        return { entry: target, otherSaversRemain: true };
+      }
+      list.splice(idx, 1);
+      return { entry: target, otherSaversRemain: false };
+    }
+
     const updated = removeUserOrArchive(
       folderPath,
       folderTitleFor(folderPath),
@@ -380,10 +443,10 @@ function mergeContributeOnly(
     );
     if (updated) {
       list[idx] = updated;
-    } else {
-      list.splice(idx, 1);
+      return { entry: target, otherSaversRemain: true };
     }
-    return target;
+    list.splice(idx, 1);
+    return { entry: target, otherSaversRemain: false };
   };
 
   if (!base) {
@@ -406,12 +469,16 @@ function mergeContributeOnly(
             resolution: 'remote-won',
             localSummary: lItem.entry.title,
             remoteSummary: matchedExisting.title,
+            localTitle: lItem.entry.title,
+            remoteTitle: matchedExisting.title,
+            localFolderPath: lItem.folderPath,
+            remoteFolderPath: lItem.folderPath,
           }),
         );
       }
     }
   } else {
-    const localDelta = computeTreeDelta(base, local);
+    const localDelta = computeTreeDelta(base, local, { browserSource: true });
 
     for (const [id, baseRef] of localDelta.baseById.entries()) {
       const lStatus = localDelta.baseStates.get(id)!;
@@ -420,18 +487,29 @@ function mergeContributeOnly(
       }
 
       if (lStatus.kind === 'deleted') {
-        unsaveFromFolder(baseRef.folderPath, baseRef.entry.normalizedUrl);
+        unsaveFromFolder(baseRef.folderPath, baseRef.entry.normalizedUrl, true);
         continue;
       }
 
       if (lStatus.kind === 'moved') {
-        const prevRemote = unsaveFromFolder(
+        // Moving is NOT a deletion — never archive the bookmark in the old folder
+        const removed = unsaveFromFolder(
           baseRef.folderPath,
           baseRef.entry.normalizedUrl,
+          false,
         );
+        const fallbackForMove = removed?.otherSaversRemain
+          ? {
+              ...removed.entry,
+              contributorNotes:
+                currentUser && removed.entry.contributorNotes?.[currentUser]
+                  ? { [currentUser]: removed.entry.contributorNotes[currentUser]! }
+                  : undefined,
+            }
+          : (removed?.entry ?? baseRef.entry);
         const carried = carryOverRichMetadata(
           withSavedBy(lStatus.entry, currentUser),
-          prevRemote ?? baseRef.entry,
+          fallbackForMove,
           false,
         );
         upsertMergedIntoFolder(folderBookmarks, lStatus.targetPath, {
@@ -478,6 +556,10 @@ function mergeContributeOnly(
               resolution: 'kept-edited',
               localSummary: `Modified "${lStatus.entry.title}"`,
               remoteSummary: `Deleted from "${baseRef.folderPath || 'root'}"`,
+              localTitle: lStatus.entry.title,
+              localFolderPath: lStatus.targetPath,
+              remoteFolderPath: baseRef.folderPath,
+              deletedSide: 'remote',
             }),
           );
           upsertMergedIntoFolder(folderBookmarks, lStatus.targetPath, kept);
@@ -552,7 +634,27 @@ export function threeWayMerge(
     ...remoteFolders.keys(),
   ]);
 
-  if (syncMode === 'contribute-only') {
+  if (syncMode === 'subscribe-only') {
+    return {
+      merged: remote,
+      browserTargetTree: remote,
+      newlyArchived: [],
+      conflicts: [],
+      localPatchNeeded: !areBrowserVisibleEqual(local, remote),
+      summary: {
+        addedBookmarks: [],
+        removedBookmarks: [],
+        updatedBookmarks: [],
+        movedBookmarks: [],
+        archivedBookmarks: [],
+        addedFolders: [],
+        removedFolders: [],
+        ...summarizeBrowserChanges(local, remote),
+      },
+    };
+  }
+
+  if (syncMode === 'contribute-only' || syncMode === 'propose-pr') {
     return mergeContributeOnly(base, local, remote, {
       currentUser,
       today,
@@ -613,6 +715,10 @@ export function threeWayMerge(
               resolution: 'remote-won',
               localSummary: lItem.entry.title,
               remoteSummary: matched.entry.title,
+              localTitle: lItem.entry.title,
+              remoteTitle: matched.entry.title,
+              localFolderPath: lItem.folderPath,
+              remoteFolderPath: lItem.folderPath,
             }),
           );
         }
@@ -653,8 +759,8 @@ export function threeWayMerge(
   }
 
   // Full 3-way merge
-  const localDelta = computeTreeDelta(base, local);
-  const remoteDelta = computeTreeDelta(base, remote);
+  const localDelta = computeTreeDelta(base, local, { browserSource: true });
+  const remoteDelta = computeTreeDelta(base, remote, { browserSource: false });
 
   for (const [id, baseRef] of localDelta.baseById.entries()) {
     const lStatus = localDelta.baseStates.get(id)!;
@@ -695,12 +801,16 @@ export function threeWayMerge(
           resolution: 'kept-edited',
           localSummary: `Deleted from "${baseRef.folderPath || 'root'}"`,
           remoteSummary: `Modified "${rStatus.entry.title}" in "${rStatus.targetPath || 'root'}"`,
+          remoteTitle: rStatus.entry.title,
+          localFolderPath: baseRef.folderPath,
+          remoteFolderPath: rStatus.targetPath,
+          deletedSide: 'local',
         }),
       );
-      pushBookmark(
-        rStatus.targetPath,
-        carryOverRichMetadata(rStatus.entry, baseRef.entry, false),
-      );
+      pushBookmark(rStatus.targetPath, {
+        ...rStatus.entry,
+        tags: [...rStatus.entry.tags],
+      });
       continue;
     }
 
@@ -716,6 +826,10 @@ export function threeWayMerge(
           resolution: 'kept-edited',
           localSummary: `Modified "${lStatus.entry.title}" in "${lStatus.targetPath || 'root'}"`,
           remoteSummary: `Deleted from "${baseRef.folderPath || 'root'}"`,
+          localTitle: lStatus.entry.title,
+          localFolderPath: lStatus.targetPath,
+          remoteFolderPath: baseRef.folderPath,
+          deletedSide: 'remote',
         }),
       );
       pushBookmark(
@@ -726,10 +840,10 @@ export function threeWayMerge(
     }
 
     if (lStatus.kind === 'unchanged' && rStatus.kind === 'unchanged') {
-      pushBookmark(
-        rStatus.targetPath,
-        carryOverRichMetadata(rStatus.entry, baseRef.entry),
-      );
+      pushBookmark(rStatus.targetPath, {
+        ...rStatus.entry,
+        tags: [...rStatus.entry.tags],
+      });
       continue;
     }
 
@@ -750,10 +864,10 @@ export function threeWayMerge(
       rStatus.kind !== 'unchanged' &&
       rStatus.kind !== 'deleted'
     ) {
-      pushBookmark(
-        rStatus.targetPath,
-        carryOverRichMetadata(rStatus.entry, baseRef.entry, false),
-      );
+      pushBookmark(rStatus.targetPath, {
+        ...rStatus.entry,
+        tags: [...rStatus.entry.tags],
+      });
       continue;
     }
 
@@ -774,14 +888,20 @@ export function threeWayMerge(
             resolution: 'remote-won',
             localSummary: `${lStatus.entry.title} (${lStatus.targetPath || 'root'})`,
             remoteSummary: `${rStatus.entry.title} (${rStatus.targetPath || 'root'})`,
+            localTitle: lStatus.entry.title,
+            remoteTitle: rStatus.entry.title,
+            localFolderPath: lStatus.targetPath,
+            remoteFolderPath: rStatus.targetPath,
           }),
         );
       }
 
-      pushBookmark(
-        rStatus.targetPath,
-        withSavedBy(carryOverRichMetadata(rStatus.entry, baseRef.entry, false), currentUser),
+      // Preserve explicit local annotations/tags even when remote wins on title/folder
+      const mergedConcurrent = mergeBookmarkEntries(
+        rStatus.entry,
+        withSavedBy(lStatus.entry, currentUser),
       );
+      pushBookmark(rStatus.targetPath, mergedConcurrent);
     }
   }
 
@@ -811,6 +931,10 @@ export function threeWayMerge(
             resolution: 'remote-won',
             localSummary: lAdd.entry.title,
             remoteSummary: matched.entry.title,
+            localTitle: lAdd.entry.title,
+            remoteTitle: matched.entry.title,
+            localFolderPath: lAdd.folderPath,
+            remoteFolderPath: lAdd.folderPath,
           }),
         );
       }

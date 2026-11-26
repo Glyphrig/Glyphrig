@@ -13,34 +13,34 @@ import {
 
 const FEATURES = [
   {
-    badge: 'Privacy-First Scope',
-    title: 'Selective Single-Folder Sync',
-    body: 'Pick one bookmark folder per sync profile—never your entire bookmark bar. Keep personal or work bookmarks completely untouched.',
+    badge: 'Team Awareness',
+    title: 'Live Page Notes & Rich Save',
+    body: 'See when teammates already saved the page you are reading—zero telemetry, matched locally—and annotate tabs via Alt+Shift+B with repo tag autocomplete.',
   },
   {
-    badge: 'Conflict-Safe',
-    title: 'Two-Way 3-Way Merge',
-    body: 'Mirror a folder across Desktop Chrome, Desktop Firefox, and Firefox for Android, or enable Contribute-only mode for shared team lists.',
+    badge: '4 Sync Modes',
+    title: 'Two-Way, Contribute, Subscribe & PRs',
+    body: 'Mirror a folder two-way, contribute without clutter, subscribe read-only to public gardens with zero token, or propose links via Pull Request.',
   },
   {
-    badge: 'Multi-Forge',
-    title: 'GitHub, GitLab & Codeberg',
-    body: 'Authenticate via one-click GitHub OAuth Device Flow or scoped PATs across GitHub, GitLab, and Forgejo / Gitea (including self-hosted).',
+    badge: 'Per-Author Context',
+    title: 'Threaded Contributor Notes',
+    body: 'Keep each collaborator’s takeaway right under the Markdown bookmark, merge attributions cleanly, and resolve conflicts side-by-side.',
   },
   {
-    badge: 'Safety Rails',
-    title: 'Built-In Public Leak Guards',
-    body: 'Skips localhost, LAN IPs, file://, and credentialed URLs, strips tracking params (utm_*, fbclid, gclid), and enforces a dry-run preview.',
+    badge: '1-Click Onboarding',
+    title: 'Join Any Garden via glyphrig.json',
+    body: 'Every published site emits a discovery manifest and invite code—paste once in Settings to join a shared garden and reuse your GitHub account.',
   },
   {
-    badge: 'Open Format',
-    title: 'Human-Editable Markdown',
-    body: 'Stores folders cleanly as bookmarks/<folder>/README.md while preserving YAML frontmatter, intro prose, notes, and #tags on every round-trip.',
+    badge: 'Link Preservation',
+    title: 'Wayback Snapshots, Importers & Digests',
+    body: 'Detect dead links with Wayback Machine fallbacks, import from Raindrop/Pinboard/Pocket/Linkding/Karakeep, and ship Slack/Discord/Matrix team digests.',
   },
   {
-    badge: 'Static Site',
-    title: 'Editorial Digital Garden',
-    body: 'Run npx @glyphrig/cli build in CI to publish a fast Astro site with Pagefind search, local favicons, RSS/JSON feeds, and a PWA Quick Add.',
+    badge: 'Static Digital Garden',
+    title: 'Granular Feeds & Zero-Token Capture',
+    body: 'Publish an Astro + Pagefind site with per-folder, per-tag, and per-contributor RSS feeds, duplicate-aware Quick Add, Suggest-a-Link, and bookmarklets.',
   },
 ];
 
@@ -48,22 +48,22 @@ const PACKAGES = [
   {
     name: '@glyphrig/extension',
     role: 'Browser Extension (MV3)',
-    summary: 'WXT extension for Chrome, Desktop Firefox, and Firefox for Android with background alarms and dry-run previews.',
+    summary: 'WXT extension for Chrome, Firefox, Firefox Android, and Edge with live team indicators, popup annotations, 1-click garden joins, and conflict resolution.',
   },
   {
     name: '@glyphrig/cli',
     role: 'Zero-Boilerplate CLI',
-    summary: 'Scaffold repos with glyphrig init, validate links, enrich cached metadata, and build your site in CI.',
+    summary: 'Scaffold repos, import from 6 tools, check link health & Wayback archives, generate team digests, apply auto-tag rules, and build in CI.',
   },
   {
     name: '@glyphrig/site',
     role: 'Astro Digital Garden',
-    summary: 'Editorial, minimal, terminal, and nord themes with offline PWA Share Target, Pagefind search, and feeds.',
+    summary: '4 themes with glyphrig.json discovery, contributor notes, granular RSS feeds, Pagefind search, and duplicate-aware PWA Quick Add.',
   },
   {
     name: '@glyphrig/core',
     role: 'Pure TypeScript Engine',
-    summary: 'Round-trip Markdown parser/serializer, URL safety filters, 3-way merge algorithm, and forge REST adapters.',
+    summary: 'Round-trip Markdown with contributor sub-notes, URL safety rails, 4-mode sync engine, auto-tag rules, invite codec, and forge PR adapters.',
   },
 ];
 

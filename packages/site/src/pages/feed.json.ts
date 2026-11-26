@@ -1,9 +1,13 @@
-import { siteData, sortRecentBookmarks, withBase } from '../lib/data.js';
+import {
+  siteData,
+  sortRecentBookmarks,
+  toAbsoluteUrl,
+  toValidIsoDate,
+} from '../lib/data.js';
 
 export function GET() {
-  const siteUrl = siteData.config.site.url?.replace(/\/+$/, '') || '';
-  const homeUrl = siteUrl ? `${siteUrl}${withBase('')}` : withBase('');
-  const feedUrl = siteUrl ? `${siteUrl}${withBase('feed.json')}` : withBase('feed.json');
+  const homeUrl = toAbsoluteUrl('');
+  const feedUrl = toAbsoluteUrl('feed.json');
   const items = sortRecentBookmarks(siteData.allBookmarks).slice(0, 100);
 
   const payload = {
@@ -17,7 +21,7 @@ export function GET() {
       url: bm.url,
       title: bm.title,
       content_text: bm.effectiveDescription || bm.domain,
-      date_published: bm.added ? `${bm.added}T12:00:00Z` : siteData.generatedAt,
+      date_published: toValidIsoDate(bm.added, siteData.generatedAt),
       tags: bm.tags,
       _glyphrig: {
         folderPath: bm.folderPath,

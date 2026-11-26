@@ -4,14 +4,44 @@ import type { SiteConfig } from '@glyphrig/site';
 import YAML from 'yaml';
 import { z } from 'zod';
 
+const HttpUrlSchema = z.string().refine(
+  (val) => {
+    try {
+      const u = new URL(val);
+      return u.protocol === 'https:' || u.protocol === 'http:';
+    } catch {
+      return false;
+    }
+  },
+  { message: 'Must be a valid http:// or https:// URL' },
+);
+
 const QuickAddSchema = z.object({
   enabled: z.boolean().default(false),
   forge: z.enum(['github', 'gitlab', 'forgejo']).default('github'),
-  instanceUrl: z.string().optional(),
+  instanceUrl: HttpUrlSchema.optional(),
   owner: z.string().default(''),
   repo: z.string().default(''),
   branch: z.string().default('main'),
   rootDir: z.string().default('bookmarks'),
+});
+
+const AutoTagRuleSchema = z.object({
+  match: z.string().min(1),
+  tags: z.array(z.string().min(1)).default([]),
+});
+
+const CollaborationSchema = z.object({
+  forge: z.enum(['github', 'gitlab', 'forgejo']).default('github'),
+  instanceUrl: HttpUrlSchema.optional(),
+  owner: z.string().min(1),
+  repo: z.string().min(1),
+  branch: z.string().default('main'),
+  rootDir: z.string().default('bookmarks'),
+  recommendedSyncMode: z
+    .enum(['two-way', 'contribute-only', 'subscribe-only', 'propose-pr'])
+    .optional(),
+  allowSuggestions: z.boolean().default(true),
 });
 
 const GlyphrigConfigSchema = z.object({
@@ -20,7 +50,7 @@ const GlyphrigConfigSchema = z.object({
       title: z.string().min(1).default('Glyphrig Bookmarks'),
       description: z.string().default('Curated public bookmarks.'),
       author: z.string().default(''),
-      url: z.string().optional(),
+      url: HttpUrlSchema.optional(),
       base: z.string().optional(),
     })
     .default({
@@ -54,6 +84,8 @@ const GlyphrigConfigSchema = z.object({
       fetchFavicons: z.boolean().default(true),
       fetchOgImage: z.boolean().default(true),
       autoTags: z.boolean().default(false),
+      autoTagRules: z.array(AutoTagRuleSchema).default([]),
+      checkWayback: z.boolean().default(false),
       concurrency: z.number().int().min(1).max(32).default(8),
       timeoutMs: z.number().int().min(500).max(30000).default(5000),
       ttlDays: z.number().int().min(1).max(365).default(30),
@@ -63,6 +95,8 @@ const GlyphrigConfigSchema = z.object({
       fetchFavicons: true,
       fetchOgImage: true,
       autoTags: false,
+      autoTagRules: [],
+      checkWayback: false,
       concurrency: 8,
       timeoutMs: 5000,
       ttlDays: 30,
@@ -90,10 +124,11 @@ const GlyphrigConfigSchema = z.object({
         rootDir: 'bookmarks',
       },
     }),
+  collaboration: CollaborationSchema.optional(),
 });
 
 export function normalizeSiteBase(rawBase?: string): string {
-  const trimmed = (rawBase ?? '/').trim() || '/';
+  const trimmed = (rawBase ?? '/').trim().replace(/^\/+/, '/') || '/';
   const withLeading = trimmed.startsWith('/') ? trimmed : `/${trimmed}`;
   return withLeading.endsWith('/') ? withLeading : `${withLeading}/`;
 }
@@ -207,6 +242,42 @@ export async function loadGlyphrigConfig(
   };
 
   const resolvedThemeUse = options.cliTheme?.trim() || parsed.theme.use;
+  const env = options.env ?? process.env;
+
+  let collaboration = parsed.collaboration;
+  if (
+    !collaboration &&
+    parsed.pwa.quickAdd.enabled &&
+    parsed.pwa.quickAdd.owner &&
+    parsed.pwa.quickAdd.repo &&
+    parsed.pwa.quickAdd.owner !== 'your-username'
+  ) {
+    collaboration = {
+      forge: parsed.pwa.quickAdd.forge,
+      ...(parsed.pwa.quickAdd.instanceUrl
+        ? { instanceUrl: parsed.pwa.quickAdd.instanceUrl }
+        : {}),
+      owner: parsed.pwa.quickAdd.owner,
+      repo: parsed.pwa.quickAdd.repo,
+      branch: parsed.pwa.quickAdd.branch,
+      rootDir: parsed.pwa.quickAdd.rootDir,
+      recommendedSyncMode: 'subscribe-only',
+      allowSuggestions: true,
+    };
+  } else if (!collaboration && env.GITHUB_REPOSITORY) {
+    const parts = env.GITHUB_REPOSITORY.split('/');
+    if (parts.length === 2 && parts[0] && parts[1]) {
+      collaboration = {
+        forge: 'github',
+        owner: parts[0],
+        repo: parts[1],
+        branch: env.GITHUB_REF_NAME || 'main',
+        rootDir: 'bookmarks',
+        recommendedSyncMode: 'subscribe-only',
+        allowSuggestions: true,
+      };
+    }
+  }
 
   const config: SiteConfig = {
     site: {
@@ -227,6 +298,7 @@ export async function loadGlyphrigConfig(
     },
     enrichment: parsed.enrichment,
     pwa: parsed.pwa,
+    ...(collaboration ? { collaboration } : {}),
   };
 
   return {

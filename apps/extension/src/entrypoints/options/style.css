@@ -495,3 +495,32 @@ dialog.modal-device {
   border-color: var(--err);
   color: var(--err);
 }
+
+.join-box {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.join-box input {
+  width: 100%;
+  font-size: 0.82rem;
+}
+
+.conflict-compare {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 8px;
+  margin-top: 6px;
+}
+
+.conflict-side {
+  padding: 6px 8px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+}
+
+.conflict-actions {
+  margin-top: 8px;
+}

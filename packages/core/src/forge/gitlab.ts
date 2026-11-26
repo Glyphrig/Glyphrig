@@ -7,6 +7,8 @@ import {
   type CommitChangesInput,
   type ForgeAdapter,
   type ForgeAdapterConfig,
+  type ProposeChangesInput,
+  type ProposeChangesResult,
   type ReadBookmarkFilesResult,
   type RepoConnectionInfo,
 } from './types.js';
@@ -41,7 +43,7 @@ export class GitLabAdapter implements ForgeAdapter {
       res = await this.fetchFn(`${this.apiBase}${path}`, {
         ...init,
         headers: {
-          'PRIVATE-TOKEN': this.token,
+          ...(this.token ? { 'PRIVATE-TOKEN': this.token } : {}),
           ...(init.body ? { 'Content-Type': 'application/json' } : {}),
           ...init.headers,
         },
@@ -72,7 +74,7 @@ export class GitLabAdapter implements ForgeAdapter {
           ? 'auth'
           : res.status === 404
             ? 'not_found'
-            : res.status === 409 || res.status === 400
+            : res.status === 409
               ? 'conflict'
               : res.status === 429
                 ? 'rate_limit'
@@ -259,5 +261,114 @@ export class GitLabAdapter implements ForgeAdapter {
 
     const data = (await res.json()) as { id: string };
     return { commitSha: data.id };
+  }
+
+  async proposeChanges(input: ProposeChangesInput): Promise<ProposeChangesResult> {
+    if (!this.token) {
+      throw new ForgeError(
+        'Authentication is required to propose bookmark changes via Merge Request.',
+        401,
+        'auth',
+      );
+    }
+
+    let knownPaths = input.existingPaths;
+    if (!knownPaths) {
+      knownPaths = new Set<string>();
+      for (const filePath of input.upserts.keys()) {
+        const check = await this.request(
+          `/projects/${this.projectId}/repository/files/${encodeURIComponent(filePath)}?ref=${encodeURIComponent(input.baseBranch)}`,
+          { method: 'HEAD' },
+          [404],
+        );
+        if (check.status !== 404) {
+          knownPaths.add(filePath);
+        }
+      }
+    }
+
+    const actions: Array<{
+      action: 'create' | 'update' | 'delete';
+      file_path: string;
+      content?: string;
+    }> = [];
+
+    for (const [filePath, content] of input.upserts.entries()) {
+      const exists = knownPaths.has(filePath);
+      actions.push({
+        action: exists ? 'update' : 'create',
+        file_path: filePath,
+        content,
+      });
+    }
+    for (const filePath of input.deletes) {
+      actions.push({
+        action: 'delete',
+        file_path: filePath,
+      });
+    }
+
+    // Always base off baseBranch with force: true so re-proposals cleanly match baseBranch's tree
+    const commitRes = await this.request(`/projects/${this.projectId}/repository/commits`, {
+      method: 'POST',
+      body: JSON.stringify({
+        branch: input.proposalBranch,
+        start_branch: input.baseBranch,
+        force: true,
+        commit_message: input.message,
+        actions,
+      }),
+    });
+    const commitData = (await commitRes.json()) as { id: string };
+
+    const existingMrsRes = await this.request(
+      `/projects/${this.projectId}/merge_requests?state=opened&source_branch=${encodeURIComponent(input.proposalBranch)}&target_branch=${encodeURIComponent(input.baseBranch)}`,
+      {},
+      [404],
+    );
+    const existingMrs =
+      existingMrsRes.status === 404
+        ? []
+        : ((await existingMrsRes.json()) as Array<{ iid: number; web_url: string }>);
+
+    const existing = existingMrs[0];
+    if (existing) {
+      const updateRes = await this.request(
+        `/projects/${this.projectId}/merge_requests/${existing.iid}`,
+        {
+          method: 'PUT',
+          body: JSON.stringify({
+            title: input.prTitle,
+            description: input.prBody,
+          }),
+        },
+      );
+      const updated = (await updateRes.json()) as { iid: number; web_url: string };
+      return {
+        commitSha: commitData.id,
+        proposalBranch: input.proposalBranch,
+        prUrl: updated.web_url || existing.web_url,
+        prNumber: updated.iid || existing.iid,
+        updatedExisting: true,
+      };
+    }
+
+    const createRes = await this.request(`/projects/${this.projectId}/merge_requests`, {
+      method: 'POST',
+      body: JSON.stringify({
+        source_branch: input.proposalBranch,
+        target_branch: input.baseBranch,
+        title: input.prTitle,
+        description: input.prBody,
+      }),
+    });
+    const created = (await createRes.json()) as { iid: number; web_url: string };
+    return {
+      commitSha: commitData.id,
+      proposalBranch: input.proposalBranch,
+      prUrl: created.web_url,
+      prNumber: created.iid,
+      updatedExisting: false,
+    };
   }
 }

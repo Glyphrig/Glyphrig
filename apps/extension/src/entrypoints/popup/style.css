@@ -27,13 +27,13 @@
 
 body {
   margin: 0;
-  width: 340px;
+  width: 370px;
   max-width: 100vw;
   background: var(--bg);
   color: var(--ink);
   font-family: system-ui, -apple-system, sans-serif;
   font-size: 14px;
-  line-height: 1.5;
+  line-height: 1.45;
 }
 
 .popup-root {
@@ -172,4 +172,93 @@ select {
   background: var(--surface);
   color: var(--ink);
   border: 1px solid var(--border);
+}
+
+.btn-sm {
+  min-height: 34px;
+  padding: 4px 10px;
+  font-size: 0.82rem;
+}
+
+.badge.is-team {
+  color: #0f766e;
+  border-color: #0f766e;
+}
+
+.team-match-card {
+  border-color: color-mix(in srgb, #0f766e 45%, var(--border));
+  background: color-mix(in srgb, #0f766e 6%, var(--surface));
+}
+
+.team-match-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.team-match-item {
+  padding-top: 4px;
+  border-top: 1px dashed var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.team-match-item:first-child {
+  border-top: 0;
+  padding-top: 0;
+}
+
+.team-note-line {
+  padding-left: 6px;
+  border-left: 2px solid var(--accent);
+}
+
+.quick-save-form {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.quick-save-form input,
+.quick-save-form select {
+  min-height: 36px;
+  padding: 5px 9px;
+  border-radius: 7px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--ink);
+  font: inherit;
+  font-size: 0.86rem;
+}
+
+.tag-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.tag-chip {
+  font-family: ui-monospace, SFMono-Regular, monospace;
+  font-size: 0.74rem;
+  padding: 2px 7px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.tag-chip:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.actions-row {
+  display: flex;
+  gap: 6px;
+}
+
+.actions-row > button {
+  flex: 1 1 0;
 }

@@ -238,8 +238,17 @@ async function loadThemeFromDirectory(
     );
   }
 
+function resolveContainedThemePath(themeDir: string, relPath: string, fieldName: string): string {
+  const root = path.resolve(themeDir);
+  const resolved = path.resolve(root, relPath);
+  if (resolved !== root && !resolved.startsWith(root + path.sep)) {
+    throw new Error(`Theme manifest "${fieldName}" escapes theme directory: ${relPath}`);
+  }
+  return resolved;
+}
+
   const cssRel = manifest.css ?? 'theme.css';
-  const cssPath = path.resolve(themeDir, cssRel);
+  const cssPath = resolveContainedThemePath(themeDir, cssRel, 'css');
   const cssStat = await statOrNull(cssPath);
   let cssContent: string | undefined;
   if (cssStat?.isFile()) {
@@ -253,7 +262,7 @@ async function loadThemeFromDirectory(
   }
 
   const headRel = manifest.head ?? 'head.html';
-  const headPath = path.resolve(themeDir, headRel);
+  const headPath = resolveContainedThemePath(themeDir, headRel, 'head');
   const headStat = await statOrNull(headPath);
   let headHtml: string | undefined;
   if (headStat?.isFile()) {
@@ -263,7 +272,7 @@ async function loadThemeFromDirectory(
   }
 
   const assetsRel = manifest.assetsDir ?? 'assets';
-  const assetsPath = path.resolve(themeDir, assetsRel);
+  const assetsPath = resolveContainedThemePath(themeDir, assetsRel, 'assetsDir');
   const assetsStat = await statOrNull(assetsPath);
   const assetsDir = assetsStat?.isDirectory() ? assetsPath : undefined;
 
@@ -413,19 +422,17 @@ function buildCssThemeTemplate(name: string, mode: 'extend' | 'replace'): Map<st
   const files = new Map<string, string>();
   files.set(
     'theme.yaml',
-    [
-      `name: ${name}`,
-      `description: Custom Glyphrig CSS theme`,
-      `version: 1.0.0`,
-      `# "extend" layers theme.css over Glyphrig's default layout CSS.`,
-      `# "replace" skips Glyphrig's default CSS so theme.css owns 100% of styling.`,
-      `mode: ${mode}`,
-      `defaults:`,
-      `  accent: "#0f766e"`,
-      `  colorScheme: system # "system" | "light" | "dark"`,
-      `  defaultView: list   # "list" | "cards"`,
-      ``,
-    ].join('\n'),
+    YAML.stringify({
+      name,
+      description: 'Custom Glyphrig CSS theme',
+      version: '1.0.0',
+      mode,
+      defaults: {
+        accent: '#0f766e',
+        colorScheme: 'system',
+        defaultView: 'list',
+      },
+    }),
   );
 
   files.set(
@@ -481,17 +488,17 @@ function buildAstroThemeTemplate(name: string): Map<string, string> {
   const files = new Map<string, string>();
   files.set(
     'theme.yaml',
-    [
-      `name: ${name}`,
-      `description: Custom Astro theme for Glyphrig`,
-      `version: 1.0.0`,
-      `mode: astro`,
-      `defaults:`,
-      `  accent: "#b45309"`,
-      `  colorScheme: system`,
-      `  defaultView: list`,
-      ``,
-    ].join('\n'),
+    YAML.stringify({
+      name,
+      description: 'Custom Astro theme for Glyphrig',
+      version: '1.0.0',
+      mode: 'astro',
+      defaults: {
+        accent: '#b45309',
+        colorScheme: 'system',
+        defaultView: 'list',
+      },
+    }),
   );
 
   files.set(
@@ -801,17 +808,17 @@ export async function ejectDefaultTheme(options: {
 
   files.set(
     'theme.yaml',
-    [
-      `name: ${name}`,
-      `description: Ejected copy of the default Glyphrig Astro theme`,
-      `version: 1.0.0`,
-      `mode: astro`,
-      `defaults:`,
-      `  accent: "#b45309"`,
-      `  colorScheme: system`,
-      `  defaultView: list`,
-      ``,
-    ].join('\n'),
+    YAML.stringify({
+      name,
+      description: 'Ejected copy of the default Glyphrig Astro theme',
+      version: '1.0.0',
+      mode: 'astro',
+      defaults: {
+        accent: '#b45309',
+        colorScheme: 'system',
+        defaultView: 'list',
+      },
+    }),
   );
 
   const siteSrcDir = path.join(SITE_ROOT, 'src');

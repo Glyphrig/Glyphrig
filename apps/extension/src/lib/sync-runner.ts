@@ -15,23 +15,61 @@ import {
   appendConflicts,
   appendHistory,
   clearDirtyProfile,
+  clearPendingAnnotations,
+  getConflicts,
+  getDirtyProfiles,
   getEffectiveGithubOAuthClientId,
+  getHistory,
+  getPendingAnnotations,
   getProfiles,
   getSharedAccounts,
   getSnapshots,
-  saveProfiles,
-  saveSharedAccounts,
   saveSnapshot,
+  updateProfiles,
+  updateSharedAccounts,
 } from './storage.js';
 
 const DEBOUNCE_ALARM_PREFIX = 'glyphrig-debounce:';
 const PULL_ALARM_PREFIX = 'glyphrig-pull:';
 const TOKEN_EXPIRY_BUFFER_MS = 5 * 60 * 1000;
 
+interface RefreshedTokenPayload {
+  token: string;
+  refreshToken: string;
+  oauthClientId: string;
+  tokenExpiresAt?: string;
+  refreshTokenExpiresAt?: string;
+}
+
+type RefreshTaskOutcome =
+  | { status: 'refreshed'; payload: RefreshedTokenPayload }
+  | { status: 'failed'; message: string };
+
 const activeLocks = new Map<string, Promise<unknown>>();
-const refreshInFlight = new Map<string, Promise<ProfileConfig>>();
+const refreshInFlight = new Map<string, Promise<RefreshTaskOutcome>>();
 const echoDepth = new Map<string, number>();
 const echoSuppressUntil = new Map<string, number>();
+
+function applyRefreshedTokensToProfile(
+  profile: ProfileConfig,
+  payload: RefreshedTokenPayload,
+): ProfileConfig {
+  const updated: ProfileConfig = {
+    ...profile,
+    token: payload.token,
+    refreshToken: payload.refreshToken,
+    oauthClientId: payload.oauthClientId,
+  };
+  if (payload.tokenExpiresAt) {
+    updated.tokenExpiresAt = payload.tokenExpiresAt;
+  } else {
+    delete updated.tokenExpiresAt;
+  }
+  if (payload.refreshTokenExpiresAt) {
+    updated.refreshTokenExpiresAt = payload.refreshTokenExpiresAt;
+  }
+  return updated;
+}
 
 export async function ensureFreshGitHubProfile(
   profile: ProfileConfig,
@@ -57,113 +95,92 @@ export async function ensureFreshGitHubProfile(
   }
 
   const oldRefreshToken = profile.refreshToken;
-  const inflight = refreshInFlight.get(oldRefreshToken);
-  if (inflight) {
-    return inflight;
+  let task = refreshInFlight.get(oldRefreshToken);
+  if (!task) {
+    task = (async (): Promise<RefreshTaskOutcome> => {
+      const res = await refreshGitHubDeviceToken(
+        clientId,
+        oldRefreshToken,
+        profile.instanceUrl?.trim() || 'https://github.com',
+      );
+
+      if (res.status === 'refreshed') {
+        const nextRefreshToken = res.refreshToken || oldRefreshToken;
+        const tokenExpiresAt = res.expiresIn
+          ? new Date(Date.now() + res.expiresIn * 1000).toISOString()
+          : undefined;
+        const refreshTokenExpiresAt = res.refreshTokenExpiresIn
+          ? new Date(Date.now() + res.refreshTokenExpiresIn * 1000).toISOString()
+          : profile.refreshTokenExpiresAt;
+
+        const payload: RefreshedTokenPayload = {
+          token: res.accessToken,
+          refreshToken: nextRefreshToken,
+          oauthClientId: clientId,
+          ...(tokenExpiresAt ? { tokenExpiresAt } : {}),
+          ...(refreshTokenExpiresAt ? { refreshTokenExpiresAt } : {}),
+        };
+
+        await updateSharedAccounts((sharedAccounts) =>
+          sharedAccounts.map((acc) => {
+            if (acc.id !== profile.accountId && acc.refreshToken !== oldRefreshToken) {
+              return acc;
+            }
+            const nextAcc = {
+              ...acc,
+              token: payload.token,
+              refreshToken: payload.refreshToken,
+              oauthClientId: payload.oauthClientId,
+              updatedAt: new Date().toISOString(),
+            };
+            if (payload.tokenExpiresAt) {
+              nextAcc.tokenExpiresAt = payload.tokenExpiresAt;
+            } else {
+              delete nextAcc.tokenExpiresAt;
+            }
+            if (payload.refreshTokenExpiresAt) {
+              nextAcc.refreshTokenExpiresAt = payload.refreshTokenExpiresAt;
+            }
+            return nextAcc;
+          }),
+        );
+
+        await updateProfiles((profiles) =>
+          profiles.map((p) => {
+            if (p.accountId) {
+              return p;
+            }
+            if (p.id !== profile.id && p.refreshToken !== oldRefreshToken) {
+              return p;
+            }
+            return applyRefreshedTokensToProfile(p, payload);
+          }),
+        );
+
+        return { status: 'refreshed', payload };
+      }
+
+      return { status: 'failed', message: res.message };
+    })();
+
+    refreshInFlight.set(oldRefreshToken, task);
+    void task.finally(() => {
+      if (refreshInFlight.get(oldRefreshToken) === task) {
+        refreshInFlight.delete(oldRefreshToken);
+      }
+    });
   }
 
-  const task = (async (): Promise<ProfileConfig> => {
-    const res = await refreshGitHubDeviceToken(
-      clientId,
-      oldRefreshToken,
-      profile.instanceUrl?.trim() || 'https://github.com',
+  const outcome = await task;
+  if (outcome.status === 'refreshed') {
+    return applyRefreshedTokensToProfile(profile, outcome.payload);
+  }
+  if (forceRefresh || isExpired) {
+    throw new Error(
+      `GitHub authorization expired (${outcome.message}). Open Glyphrig Settings and sign in with GitHub again.`,
     );
-
-    if (res.status === 'refreshed') {
-      const nextRefreshToken = res.refreshToken || oldRefreshToken;
-      const tokenExpiresAt = res.expiresIn
-        ? new Date(Date.now() + res.expiresIn * 1000).toISOString()
-        : undefined;
-      const refreshTokenExpiresAt = res.refreshTokenExpiresIn
-        ? new Date(Date.now() + res.refreshTokenExpiresIn * 1000).toISOString()
-        : profile.refreshTokenExpiresAt;
-
-      const [profiles, sharedAccounts] = await Promise.all([
-        getProfiles(),
-        getSharedAccounts(),
-      ]);
-
-      let sharedChanged = false;
-      const nextSharedAccounts = sharedAccounts.map((acc) => {
-        if (acc.id !== profile.accountId && acc.refreshToken !== oldRefreshToken) {
-          return acc;
-        }
-        sharedChanged = true;
-        return {
-          ...acc,
-          token: res.accessToken,
-          refreshToken: nextRefreshToken,
-          oauthClientId: clientId,
-          updatedAt: new Date().toISOString(),
-          ...(tokenExpiresAt ? { tokenExpiresAt } : {}),
-          ...(refreshTokenExpiresAt ? { refreshTokenExpiresAt } : {}),
-        };
-      });
-      if (sharedChanged) {
-        await saveSharedAccounts(nextSharedAccounts);
-      }
-
-      let updatedSelf: ProfileConfig | null = null;
-      let profilesChanged = false;
-      const nextProfiles = profiles.map((p) => {
-        if (p.accountId) {
-          return p;
-        }
-        if (p.id !== profile.id && p.refreshToken !== oldRefreshToken) {
-          return p;
-        }
-        profilesChanged = true;
-        const updated: ProfileConfig = {
-          ...p,
-          token: res.accessToken,
-          refreshToken: nextRefreshToken,
-          oauthClientId: clientId,
-        };
-        if (tokenExpiresAt) {
-          updated.tokenExpiresAt = tokenExpiresAt;
-        } else {
-          delete updated.tokenExpiresAt;
-        }
-        if (refreshTokenExpiresAt) {
-          updated.refreshTokenExpiresAt = refreshTokenExpiresAt;
-        }
-        if (p.id === profile.id) {
-          updatedSelf = updated;
-        }
-        return updated;
-      });
-
-      if (profilesChanged) {
-        await saveProfiles(nextProfiles);
-      }
-      return (
-        updatedSelf ?? {
-          ...profile,
-          token: res.accessToken,
-          refreshToken: nextRefreshToken,
-          oauthClientId: clientId,
-          ...(tokenExpiresAt ? { tokenExpiresAt } : {}),
-          ...(refreshTokenExpiresAt ? { refreshTokenExpiresAt } : {}),
-        }
-      );
-    }
-
-    if (forceRefresh || isExpired) {
-      throw new Error(
-        `GitHub authorization expired (${res.message}). Open Glyphrig Settings and sign in with GitHub again.`,
-      );
-    }
-    return profile;
-  })();
-
-  refreshInFlight.set(oldRefreshToken, task);
-  try {
-    return await task;
-  } finally {
-    if (refreshInFlight.get(oldRefreshToken) === task) {
-      refreshInFlight.delete(oldRefreshToken);
-    }
   }
+  return profile;
 }
 
 export function isEchoSuppressed(profileId: string): boolean {
@@ -172,11 +189,11 @@ export function isEchoSuppressed(profileId: string): boolean {
   return Date.now() < until;
 }
 
-function beginEchoSuppression(profileId: string): void {
+export function beginEchoSuppression(profileId: string): void {
   echoDepth.set(profileId, (echoDepth.get(profileId) ?? 0) + 1);
 }
 
-function endEchoSuppression(profileId: string): void {
+export function endEchoSuppression(profileId: string): void {
   const next = Math.max(0, (echoDepth.get(profileId) ?? 1) - 1);
   echoDepth.set(profileId, next);
   // Grace window covers asynchronous browser.bookmarks events fired right after mutation resolves
@@ -230,32 +247,80 @@ export function parseAlarmName(
   return null;
 }
 
-async function updateBadge(status: 'ok' | 'warning' | 'error', dirtyCount = 0): Promise<void> {
-  if (!browser.action) return;
+export type GlobalBadgeSeverity = 'error' | 'warning' | 'dirty' | 'ok';
+
+export async function getGlobalBadgeState(): Promise<{
+  severity: GlobalBadgeSeverity;
+  dirtyCount: number;
+}> {
+  const [profiles, history, dirtyProfiles, conflicts] = await Promise.all([
+    getProfiles(),
+    getHistory(),
+    getDirtyProfiles(),
+    getConflicts(),
+  ]);
+  const enabledIds = new Set(profiles.filter((p) => p.enabled).map((p) => p.id));
+  if (enabledIds.size === 0) {
+    return { severity: 'ok', dirtyCount: 0 };
+  }
+
+  let hasError = false;
+  let hasWarning = false;
+  for (const id of enabledIds) {
+    const latest = history.find((h) => h.profileId === id);
+    if (latest?.status === 'error') {
+      hasError = true;
+      break;
+    }
+    if (latest?.status === 'warning') {
+      hasWarning = true;
+    }
+  }
+  if (hasError) {
+    return { severity: 'error', dirtyCount: 0 };
+  }
+
+  let totalDirty = 0;
+  for (const id of enabledIds) {
+    totalDirty += dirtyProfiles[id] ?? 0;
+  }
+  if (totalDirty > 0) {
+    return { severity: 'dirty', dirtyCount: totalDirty };
+  }
+
+  const hasUnresolvedConflict = conflicts.some(
+    (c) => !c.resolved && (!c.profileId || enabledIds.has(c.profileId)),
+  );
+  if (hasWarning || hasUnresolvedConflict) {
+    return { severity: 'warning', dirtyCount: 0 };
+  }
+  return { severity: 'ok', dirtyCount: 0 };
+}
+
+export async function recomputeGlobalBadge(): Promise<GlobalBadgeSeverity> {
+  const { severity, dirtyCount } = await getGlobalBadgeState();
+  if (!browser.action) return severity;
   try {
-    if (status === 'error') {
+    if (severity === 'error') {
       await browser.action.setBadgeText({ text: '!' });
       await browser.action.setBadgeBackgroundColor({ color: '#dc2626' });
-    } else if (status === 'warning') {
-      await browser.action.setBadgeText({ text: '!' });
-      await browser.action.setBadgeBackgroundColor({ color: '#d97706' });
-    } else if (dirtyCount > 0) {
+    } else if (severity === 'dirty') {
       await browser.action.setBadgeText({ text: String(dirtyCount) });
       await browser.action.setBadgeBackgroundColor({ color: '#b45309' });
+    } else if (severity === 'warning') {
+      await browser.action.setBadgeText({ text: '!' });
+      await browser.action.setBadgeBackgroundColor({ color: '#d97706' });
     } else {
       await browser.action.setBadgeText({ text: '' });
     }
   } catch {
     // Ignore on platforms where action badge APIs are unavailable
   }
+  return severity;
 }
 
-export async function refreshPendingBadge(profileId: string, dirtyCount: number): Promise<void> {
-  const profiles = await getProfiles();
-  const profile = profiles.find((p) => p.id === profileId);
-  if (profile?.enabled) {
-    await updateBadge('ok', dirtyCount);
-  }
+export async function refreshPendingBadge(_profileId?: string, _dirtyCount?: number): Promise<void> {
+  await recomputeGlobalBadge();
 }
 
 async function withProfileLock<T>(
@@ -290,7 +355,11 @@ function buildSyncSummaryMessage(result: SyncResult): string {
     return 'Already up to date.';
   }
   const parts: string[] = [];
-  if (pushed > 0 || result.committed) {
+  if (result.pullRequestUrl) {
+    parts.push(
+      `proposed PR${result.pullRequestNumber ? ` #${result.pullRequestNumber}` : ''} (${result.upserts.length + result.deletes.length} file change(s))`,
+    );
+  } else if (pushed > 0 || result.committed) {
     parts.push(`pushed ${result.upserts.length + result.deletes.length} file change(s)`);
   }
   if (result.archivedCount > 0) {
@@ -308,8 +377,11 @@ async function executeSync(
   trigger: SyncLogEntry['trigger'],
 ): Promise<SyncResult> {
   const resolvedProfile = resolveEffectiveProfile(profile, await getSharedAccounts());
+  const syncMode = resolvedProfile.syncMode ?? 'two-way';
+  const requiresToken = syncMode !== 'subscribe-only';
+
   if (
-    !resolvedProfile.token ||
+    (requiresToken && !resolvedProfile.token) ||
     !resolvedProfile.owner ||
     !resolvedProfile.repo ||
     !resolvedProfile.rootFolderId
@@ -317,8 +389,13 @@ async function executeSync(
     throw new Error('Profile is missing repository credentials or bookmark folder.');
   }
 
-  let activeProfile = await ensureFreshGitHubProfile(resolvedProfile, false);
-  const snapshots = await getSnapshots();
+  let activeProfile = resolvedProfile.token
+    ? await ensureFreshGitHubProfile(resolvedProfile, false)
+    : resolvedProfile;
+  const [snapshots, pendingAnnotations] = await Promise.all([
+    getSnapshots(),
+    getPendingAnnotations(activeProfile.id),
+  ]);
   const snapshot = snapshots[activeProfile.id] ?? null;
   const localTree = await readBrowserSubtree(activeProfile.rootFolderId);
 
@@ -332,33 +409,31 @@ async function executeSync(
     });
 
     let currentUser = targetProfile.username?.trim() || undefined;
-    if (!currentUser) {
+    if (!currentUser && targetProfile.token) {
       try {
         const authUser = await adapter.getAuthenticatedUser();
         const fetched = authUser?.username?.trim();
         if (fetched) {
           currentUser = fetched;
-          const [profiles, accounts] = await Promise.all([
-            getProfiles(),
-            getSharedAccounts(),
-          ]);
-          const idx = profiles.findIndex((p) => p.id === targetProfile.id);
-          if (idx >= 0) {
-            const updated = [...profiles];
-            updated[idx] = { ...updated[idx]!, username: fetched };
-            await saveProfiles(updated);
-          }
+          await updateProfiles((profiles) =>
+            profiles.map((p) =>
+              p.id === targetProfile.id ? { ...p, username: fetched } : p,
+            ),
+          );
           if (targetProfile.accountId) {
-            const accIdx = accounts.findIndex((a) => a.id === targetProfile.accountId);
-            if (accIdx >= 0 && !accounts[accIdx]!.username) {
-              const updatedAccs = [...accounts];
-              updatedAccs[accIdx] = {
-                ...updatedAccs[accIdx]!,
-                username: fetched,
-                ...(authUser.displayName ? { displayName: authUser.displayName } : {}),
-              };
-              await saveSharedAccounts(updatedAccs);
-            }
+            await updateSharedAccounts((accounts) =>
+              accounts.map((acc) =>
+                acc.id === targetProfile.accountId && !acc.username
+                  ? {
+                      ...acc,
+                      username: fetched,
+                      ...(authUser.displayName
+                        ? { displayName: authUser.displayName }
+                        : {}),
+                    }
+                  : acc,
+              ),
+            );
           }
         }
       } catch {
@@ -373,9 +448,10 @@ async function executeSync(
       rootDir: targetProfile.rootDir || 'bookmarks',
       localTree,
       snapshot,
-      syncMode: targetProfile.syncMode ?? 'two-way',
+      syncMode,
       currentUser,
       safety: targetProfile.safety,
+      localAnnotations: pendingAnnotations,
       dryRun,
     });
   };
@@ -420,9 +496,15 @@ async function executeSync(
   // Persist snapshot of sanitized local+remote merged tree
   await saveSnapshot(activeProfile.id, result.snapshot);
   await clearDirtyProfile(activeProfile.id);
+  await browser.alarms?.clear(`${DEBOUNCE_ALARM_PREFIX}${activeProfile.id}`).catch(() => {});
+  if (pendingAnnotations.length > 0) {
+    await clearPendingAnnotations(activeProfile.id, pendingAnnotations);
+  }
 
   if (result.conflicts.length > 0) {
-    await appendConflicts(result.conflicts);
+    await appendConflicts(
+      result.conflicts.map((c) => ({ ...c, profileId: activeProfile.id })),
+    );
   }
 
   const hasAlerts = result.skipped.length > 0 || result.conflicts.length > 0;
@@ -436,13 +518,17 @@ async function executeSync(
     trigger,
     status,
     commitSha: result.commitSha,
+    ...(result.pullRequestUrl ? { pullRequestUrl: result.pullRequestUrl } : {}),
+    ...(result.pullRequestNumber !== undefined
+      ? { pullRequestNumber: result.pullRequestNumber }
+      : {}),
     message: buildSyncSummaryMessage(result),
     skippedCount: result.skipped.length,
     conflictCount: result.conflicts.length,
     ...(result.skipped.length > 0 ? { skipped: result.skipped } : {}),
   });
 
-  await updateBadge(status, 0);
+  await recomputeGlobalBadge();
   return result;
 }
 
@@ -496,7 +582,7 @@ export async function runProfileSync(
         skippedCount: 0,
         conflictCount: 0,
       });
-      await updateBadge('error', 0);
+      await recomputeGlobalBadge();
       throw err;
     }
   });

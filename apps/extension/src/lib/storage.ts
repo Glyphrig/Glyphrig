@@ -1,6 +1,7 @@
 import {
   generateId,
   type ConflictRecord,
+  type PendingBookmarkAnnotation,
   type ProfileConfig,
   type SharedGitHubAccount,
   type SyncSnapshot,
@@ -18,9 +19,24 @@ const STORAGE_KEYS = {
   conflicts: 'glyphrig_conflicts',
   dirtyProfiles: 'glyphrig_dirty_profiles',
   githubOAuthClientIdOverride: 'glyphrig_github_oauth_client_id',
+  pendingAnnotations: 'glyphrig_pending_annotations',
+  livePageBadgeEnabled: 'glyphrig_live_page_badge',
 } as const;
 
 const MAX_LOG_ENTRIES = 100;
+
+const storageKeyLocks = new Map<string, Promise<unknown>>();
+
+function withStorageKeyLock<T>(key: string, fn: () => Promise<T>): Promise<T> {
+  const prev = storageKeyLocks.get(key) ?? Promise.resolve();
+  const run = prev.then(fn, fn);
+  storageKeyLocks.set(key, run);
+  return run.finally(() => {
+    if (storageKeyLocks.get(key) === run) {
+      storageKeyLocks.delete(key);
+    }
+  });
+}
 
 export async function getProfiles(): Promise<ProfileConfig[]> {
   const res = await browser.storage.local.get(STORAGE_KEYS.profiles);
@@ -29,7 +45,20 @@ export async function getProfiles(): Promise<ProfileConfig[]> {
 }
 
 export async function saveProfiles(profiles: ProfileConfig[]): Promise<void> {
-  await browser.storage.local.set({ [STORAGE_KEYS.profiles]: profiles });
+  await withStorageKeyLock(STORAGE_KEYS.profiles, async () => {
+    await browser.storage.local.set({ [STORAGE_KEYS.profiles]: profiles });
+  });
+}
+
+export async function updateProfiles(
+  updater: (profiles: ProfileConfig[]) => ProfileConfig[],
+): Promise<ProfileConfig[]> {
+  return withStorageKeyLock(STORAGE_KEYS.profiles, async () => {
+    const current = await getProfiles();
+    const next = updater(current);
+    await browser.storage.local.set({ [STORAGE_KEYS.profiles]: next });
+    return next;
+  });
 }
 
 export async function getActiveProfileId(): Promise<string | null> {
@@ -52,13 +81,15 @@ export async function saveSnapshot(
   profileId: string,
   snapshot: SyncSnapshot | null,
 ): Promise<void> {
-  const all = await getSnapshots();
-  if (snapshot) {
-    all[profileId] = snapshot;
-  } else {
-    delete all[profileId];
-  }
-  await browser.storage.local.set({ [STORAGE_KEYS.snapshots]: all });
+  await withStorageKeyLock(STORAGE_KEYS.snapshots, async () => {
+    const all = await getSnapshots();
+    if (snapshot) {
+      all[profileId] = snapshot;
+    } else {
+      delete all[profileId];
+    }
+    await browser.storage.local.set({ [STORAGE_KEYS.snapshots]: all });
+  });
 }
 
 export async function getHistory(): Promise<SyncLogEntry[]> {
@@ -68,9 +99,11 @@ export async function getHistory(): Promise<SyncLogEntry[]> {
 }
 
 export async function appendHistory(entry: SyncLogEntry): Promise<void> {
-  const list = await getHistory();
-  const next = [entry, ...list].slice(0, MAX_LOG_ENTRIES);
-  await browser.storage.local.set({ [STORAGE_KEYS.history]: next });
+  await withStorageKeyLock(STORAGE_KEYS.history, async () => {
+    const list = await getHistory();
+    const next = [entry, ...list].slice(0, MAX_LOG_ENTRIES);
+    await browser.storage.local.set({ [STORAGE_KEYS.history]: next });
+  });
 }
 
 export async function getConflicts(): Promise<ConflictRecord[]> {
@@ -81,16 +114,113 @@ export async function getConflicts(): Promise<ConflictRecord[]> {
 
 export async function appendConflicts(records: ConflictRecord[]): Promise<void> {
   if (records.length === 0) return;
-  const existing = await getConflicts();
-  const next = [...records, ...existing].slice(0, MAX_LOG_ENTRIES);
-  await browser.storage.local.set({ [STORAGE_KEYS.conflicts]: next });
+  await withStorageKeyLock(STORAGE_KEYS.conflicts, async () => {
+    const existing = await getConflicts();
+    const next = [...records, ...existing].slice(0, MAX_LOG_ENTRIES);
+    await browser.storage.local.set({ [STORAGE_KEYS.conflicts]: next });
+  });
 }
 
 export async function clearHistoryAndConflicts(): Promise<void> {
-  await browser.storage.local.set({
-    [STORAGE_KEYS.history]: [],
-    [STORAGE_KEYS.conflicts]: [],
+  await Promise.all([
+    withStorageKeyLock(STORAGE_KEYS.history, async () => {
+      await browser.storage.local.set({ [STORAGE_KEYS.history]: [] });
+    }),
+    withStorageKeyLock(STORAGE_KEYS.conflicts, async () => {
+      await browser.storage.local.set({ [STORAGE_KEYS.conflicts]: [] });
+    }),
+  ]);
+}
+
+export async function updateConflictRecord(
+  conflictId: string,
+  patch: Partial<ConflictRecord>,
+): Promise<ConflictRecord[]> {
+  return withStorageKeyLock(STORAGE_KEYS.conflicts, async () => {
+    const existing = await getConflicts();
+    const next = existing.map((c) => (c.id === conflictId ? { ...c, ...patch } : c));
+    await browser.storage.local.set({ [STORAGE_KEYS.conflicts]: next });
+    return next;
   });
+}
+
+export async function getAllPendingAnnotations(): Promise<
+  Record<string, PendingBookmarkAnnotation[]>
+> {
+  const res = await browser.storage.local.get(STORAGE_KEYS.pendingAnnotations);
+  const val = res[STORAGE_KEYS.pendingAnnotations];
+  return val && typeof val === 'object'
+    ? (val as Record<string, PendingBookmarkAnnotation[]>)
+    : {};
+}
+
+export async function getPendingAnnotations(
+  profileId: string,
+): Promise<PendingBookmarkAnnotation[]> {
+  const all = await getAllPendingAnnotations();
+  return Array.isArray(all[profileId]) ? all[profileId]! : [];
+}
+
+export async function upsertPendingAnnotation(
+  profileId: string,
+  annotation: PendingBookmarkAnnotation,
+): Promise<void> {
+  await withStorageKeyLock(STORAGE_KEYS.pendingAnnotations, async () => {
+    const all = await getAllPendingAnnotations();
+    const list = Array.isArray(all[profileId]) ? [...all[profileId]!] : [];
+    const idx = list.findIndex(
+      (a) =>
+        a.normalizedUrl === annotation.normalizedUrl &&
+        (a.folderPath ?? '') === (annotation.folderPath ?? ''),
+    );
+    if (idx >= 0) {
+      list[idx] = annotation;
+    } else {
+      list.push(annotation);
+    }
+    all[profileId] = list;
+    await browser.storage.local.set({ [STORAGE_KEYS.pendingAnnotations]: all });
+  });
+}
+
+export async function clearPendingAnnotations(
+  profileId: string,
+  consumed?: PendingBookmarkAnnotation[],
+): Promise<void> {
+  await withStorageKeyLock(STORAGE_KEYS.pendingAnnotations, async () => {
+    const all = await getAllPendingAnnotations();
+    const existing = all[profileId];
+    if (!existing) return;
+    if (!consumed) {
+      delete all[profileId];
+      await browser.storage.local.set({ [STORAGE_KEYS.pendingAnnotations]: all });
+      return;
+    }
+    const consumedKeys = new Set(
+      consumed.map(
+        (a) => `${a.normalizedUrl}\0${a.folderPath ?? ''}\0${a.updatedAt}`,
+      ),
+    );
+    const remaining = existing.filter(
+      (a) =>
+        !consumedKeys.has(`${a.normalizedUrl}\0${a.folderPath ?? ''}\0${a.updatedAt}`),
+    );
+    if (remaining.length === 0) {
+      delete all[profileId];
+    } else {
+      all[profileId] = remaining;
+    }
+    await browser.storage.local.set({ [STORAGE_KEYS.pendingAnnotations]: all });
+  });
+}
+
+export async function getLivePageBadgeEnabled(): Promise<boolean> {
+  const res = await browser.storage.local.get(STORAGE_KEYS.livePageBadgeEnabled);
+  return Boolean(res[STORAGE_KEYS.livePageBadgeEnabled]);
+}
+
+export async function setLivePageBadgeEnabled(enabled: boolean): Promise<void> {
+  await browser.storage.local.set({ [STORAGE_KEYS.livePageBadgeEnabled]: enabled });
 }
 
 export async function getDirtyProfiles(): Promise<Record<string, number>> {
@@ -100,19 +230,23 @@ export async function getDirtyProfiles(): Promise<Record<string, number>> {
 }
 
 export async function incrementDirtyProfile(profileId: string): Promise<number> {
-  const all = await getDirtyProfiles();
-  const next = (all[profileId] ?? 0) + 1;
-  all[profileId] = next;
-  await browser.storage.local.set({ [STORAGE_KEYS.dirtyProfiles]: all });
-  return next;
+  return withStorageKeyLock(STORAGE_KEYS.dirtyProfiles, async () => {
+    const all = await getDirtyProfiles();
+    const next = (all[profileId] ?? 0) + 1;
+    all[profileId] = next;
+    await browser.storage.local.set({ [STORAGE_KEYS.dirtyProfiles]: all });
+    return next;
+  });
 }
 
 export async function clearDirtyProfile(profileId: string): Promise<void> {
-  const all = await getDirtyProfiles();
-  if (profileId in all) {
-    delete all[profileId];
-    await browser.storage.local.set({ [STORAGE_KEYS.dirtyProfiles]: all });
-  }
+  await withStorageKeyLock(STORAGE_KEYS.dirtyProfiles, async () => {
+    const all = await getDirtyProfiles();
+    if (profileId in all) {
+      delete all[profileId];
+      await browser.storage.local.set({ [STORAGE_KEYS.dirtyProfiles]: all });
+    }
+  });
 }
 
 export async function getGithubOAuthClientIdOverride(): Promise<string> {
@@ -140,30 +274,39 @@ export async function getSharedAccounts(): Promise<SharedGitHubAccount[]> {
 }
 
 export async function saveSharedAccounts(accounts: SharedGitHubAccount[]): Promise<void> {
-  await browser.storage.local.set({ [STORAGE_KEYS.sharedAccounts]: accounts });
+  await withStorageKeyLock(STORAGE_KEYS.sharedAccounts, async () => {
+    await browser.storage.local.set({ [STORAGE_KEYS.sharedAccounts]: accounts });
+  });
+}
+
+export async function updateSharedAccounts(
+  updater: (accounts: SharedGitHubAccount[]) => SharedGitHubAccount[],
+): Promise<SharedGitHubAccount[]> {
+  return withStorageKeyLock(STORAGE_KEYS.sharedAccounts, async () => {
+    const current = await getSharedAccounts();
+    const next = updater(current);
+    await browser.storage.local.set({ [STORAGE_KEYS.sharedAccounts]: next });
+    return next;
+  });
 }
 
 export async function upsertSharedAccount(
   account: SharedGitHubAccount,
 ): Promise<SharedGitHubAccount[]> {
-  const existing = await getSharedAccounts();
-  const idx = existing.findIndex((a) => a.id === account.id);
-  const next = [...existing];
-  if (idx >= 0) {
-    next[idx] = account;
-  } else {
-    next.push(account);
-  }
-  await saveSharedAccounts(next);
-  return next;
+  return updateSharedAccounts((existing) => {
+    const idx = existing.findIndex((a) => a.id === account.id);
+    const next = [...existing];
+    if (idx >= 0) {
+      next[idx] = account;
+    } else {
+      next.push(account);
+    }
+    return next;
+  });
 }
 
 export async function deleteSharedAccount(accountId: string): Promise<void> {
-  const existing = await getSharedAccounts();
-  const next = existing.filter((a) => a.id !== accountId);
-  if (next.length !== existing.length) {
-    await saveSharedAccounts(next);
-  }
+  await updateSharedAccounts((existing) => existing.filter((a) => a.id !== accountId));
 }
 
 let migrationPromise: Promise<void> | null = null;

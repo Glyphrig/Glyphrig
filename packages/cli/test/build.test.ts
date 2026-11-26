@@ -204,4 +204,175 @@ describe('Astro + Pagefind site build', () => {
     expect(bobHtml).toContain('https://bob.example.com');
     expect(bobHtml).toContain('2 unique bookmarks');
   }, 30000);
+
+  it('builds glyphrig.json, granular RSS feeds, contributor notes, maintainers, and archived link badges', async () => {
+    const repoDir = await makeTempDir();
+    const outDir = path.join(repoDir, 'dist');
+    const cacheDir = path.join(repoDir, '.glyphrig-cache');
+
+    await fs.writeFile(
+      path.join(repoDir, 'glyphrig.config.yaml'),
+      [
+        'site:',
+        '  title: Collab Garden',
+        '  url: https://team.github.io',
+        'collaboration:',
+        '  forge: github',
+        '  owner: team',
+        '  repo: garden',
+        '  branch: main',
+        '  rootDir: bookmarks',
+        '  recommendedSyncMode: subscribe-only',
+        'enrichment:',
+        '  autoTagRules:',
+        '    - match: docs.rs/**',
+        '      tags: [rust]',
+      ].join('\n'),
+      'utf8',
+    );
+
+    await fs.mkdir(path.join(repoDir, 'bookmarks/systems'), { recursive: true });
+    await fs.mkdir(cacheDir, { recursive: true });
+    await fs.writeFile(
+      path.join(cacheDir, 'link-health.json'),
+      JSON.stringify({
+        version: 1,
+        checkedAt: '2026-11-25T00:00:00Z',
+        entries: {
+          'https://docs.rs/tokio': {
+            url: 'https://docs.rs/tokio',
+            status: 'dead',
+            httpStatus: 404,
+            waybackUrl: 'https://web.archive.org/web/20260101/https://docs.rs/tokio',
+            checkedAt: '2026-11-25T00:00:00Z',
+          },
+        },
+      }),
+    );
+
+    await fs.writeFile(
+      path.join(repoDir, 'bookmarks/README.md'),
+      '---\ntitle: Home\norder: 0\n---\n',
+      'utf8',
+    );
+    await fs.writeFile(
+      path.join(repoDir, 'bookmarks/systems/README.md'),
+      [
+        '---',
+        'title: Systems',
+        'order: 0',
+        'maintainers:',
+        '  - alice',
+        '---',
+        '',
+        '- [Tokio Docs](https://docs.rs/tokio) <!-- glyphrig: added=2026-11-24 by=alice,bob -->',
+        '  - **@alice**: Async runtime reference',
+        '  - **@bob**: Great tracing guide',
+        '',
+      ].join('\n'),
+      'utf8',
+    );
+
+    await buildSite({
+      cwd: repoDir,
+      inputDir: 'bookmarks',
+      outDir,
+      cacheDir,
+      base: '/garden/',
+      noEnrich: true,
+    });
+
+    const manifest = JSON.parse(await fs.readFile(path.join(outDir, 'glyphrig.json'), 'utf8'));
+    expect(manifest).toMatchObject({
+      version: 1,
+      forge: 'github',
+      owner: 'team',
+      repo: 'garden',
+      recommendedSyncMode: 'subscribe-only',
+    });
+
+    for (const rel of [
+      'feeds/f/systems.xml',
+      'feeds/tags/rust.xml',
+      'feeds/u/alice.xml',
+      'feeds/u/bob.xml',
+    ]) {
+      const xml = await fs.readFile(path.join(outDir, rel), 'utf8');
+      expect(xml).toContain('<rss version="2.0">');
+      expect(xml).toContain('Tokio Docs');
+    }
+
+    const folderHtml = await fs.readFile(path.join(outDir, 'f/systems/index.html'), 'utf8');
+    expect(folderHtml).toContain('Maintained by');
+    expect(folderHtml).toContain('Async runtime reference');
+    expect(folderHtml).toContain('Great tracing guide');
+    expect(folderHtml).toContain('Link offline');
+    expect(folderHtml).toContain('https://web.archive.org/web/20260101/https://docs.rs/tokio');
+    expect(folderHtml).toContain('glyphrig-invite:');
+    expect(folderHtml).toContain('/garden/feeds/f/systems.xml');
+  }, 30000);
+
+  it('escapes </script> in embedded JSON, prevents doubled subpath URLs, and blocks .. tag traversal', async () => {
+    const repoDir = await makeTempDir();
+    const outDir = path.join(repoDir, 'dist');
+    const cacheDir = path.join(repoDir, '.glyphrig-cache');
+
+    await fs.writeFile(
+      path.join(repoDir, 'glyphrig.config.yaml'),
+      [
+        'site:',
+        '  title: Safe </script><script>alert(1)</script> Garden',
+        '  url: https://team.github.io/garden',
+        'collaboration:',
+        '  forge: github',
+        '  owner: team',
+        '  repo: garden',
+      ].join('\n'),
+      'utf8',
+    );
+
+    await fs.mkdir(path.join(repoDir, 'bookmarks'), { recursive: true });
+    await fs.writeFile(
+      path.join(repoDir, 'bookmarks/README.md'),
+      [
+        '---',
+        'title: Home',
+        'order: 0',
+        '---',
+        '',
+        '- [Break </script><script>alert(2)</script>](https://safe.example.org/item) `#..` `#ok`',
+        '',
+      ].join('\n'),
+      'utf8',
+    );
+
+    await buildSite({
+      cwd: repoDir,
+      inputDir: 'bookmarks',
+      outDir,
+      cacheDir,
+      base: '/garden/',
+      noEnrich: true,
+    });
+
+    const indexHtml = await fs.readFile(path.join(outDir, 'index.html'), 'utf8');
+    // Embedded JSON script blocks must escape </script> as \u003c/script\u003e
+    const jsonScriptMatch = indexHtml.match(
+      /<script type="application\/json" id="glyphrig-quickadd-data">([\s\S]*?)<\/script>/,
+    );
+    expect(jsonScriptMatch?.[1]).toBeDefined();
+    expect(jsonScriptMatch![1]).toContain('\\u003c/script\\u003e');
+    expect(jsonScriptMatch![1]).not.toContain('</script>');
+    expect(indexHtml).toContain('Safe');
+    // .. tag is sanitized to /tags/tag/ rather than traversing to dist/index.html
+    expect(indexHtml).toContain('/garden/tags/tag/');
+    expect(indexHtml).not.toContain('/garden/tags/../');
+
+    const manifest = JSON.parse(await fs.readFile(path.join(outDir, 'glyphrig.json'), 'utf8'));
+    expect(manifest.siteUrl).toBe('https://team.github.io/garden/');
+    expect(manifest.siteUrl).not.toContain('/garden/garden');
+
+    const rss = await fs.readFile(path.join(outDir, 'rss.xml'), 'utf8');
+    expect(rss).not.toContain('/garden/garden');
+  }, 30000);
 });

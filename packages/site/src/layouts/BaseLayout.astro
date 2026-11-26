@@ -3,6 +3,7 @@ import 'virtual:glyphrig-theme.css';
 import Sidebar from '../components/Sidebar.astro';
 import SearchModal from '../components/SearchModal.astro';
 import QuickAddDrawer from '../components/QuickAddDrawer.astro';
+import JoinGardenModal from '../components/JoinGardenModal.astro';
 import { siteData, withBase } from '../lib/data.js';
 
 interface Props {
@@ -11,6 +12,7 @@ interface Props {
   activeNav: 'home' | 'recent' | 'popular' | 'tags' | 'contributors' | 'folder';
   activeFolderPath?: string;
   indexForSearch?: boolean;
+  extraFeed?: { title: string; href: string };
 }
 
 const {
@@ -19,6 +21,7 @@ const {
   activeNav,
   activeFolderPath,
   indexForSearch = true,
+  extraFeed,
 } = Astro.props;
 
 const fullTitle =
@@ -52,6 +55,14 @@ const faviconHref = siteData.hasCustomFaviconAsset
       title={`${siteData.config.site.title} JSON Feed`}
       href={withBase('feed.json')}
     />
+    {extraFeed && (
+      <link
+        rel="alternate"
+        type="application/rss+xml"
+        title={extraFeed.title}
+        href={extraFeed.href}
+      />
+    )}
     {siteData.config.pwa.enabled && (
       <link rel="manifest" href={withBase('manifest.webmanifest')} />
     )}
@@ -114,6 +125,7 @@ const faviconHref = siteData.hasCustomFaviconAsset
 
     <SearchModal />
     <QuickAddDrawer />
+    <JoinGardenModal />
 
     {siteData.config.pwa.enabled && (
       <script define:vars={{ swUrl: withBase('sw.js'), swScope: withBase('') }}>

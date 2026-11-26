@@ -1,5 +1,5 @@
 ---
-import { siteData } from '../lib/data.js';
+import { isQuickAddUiEnabled, siteData } from '../lib/data.js';
 
 interface Props {
   tags?: Array<{ tag: string; slug: string; count: number }>;
@@ -12,7 +12,7 @@ const {
   defaultView = siteData.config.theme.defaultView,
   showViewToggle = true,
 } = Astro.props;
-const quickAddEnabled = siteData.config.pwa.quickAdd.enabled;
+const quickAddEnabled = isQuickAddUiEnabled();
 ---
 
 <div class="view-controls" data-default-view={defaultView}>
@@ -96,20 +96,28 @@ const quickAddEnabled = siteData.config.pwa.quickAdd.enabled;
     });
   });
 
+  function applyBookmarkFilters(): void {
+    const activeTag = collection?.dataset.activeTag || '';
+    const activeContrib = collection?.dataset.activeContrib || '';
+    document.querySelectorAll<HTMLElement>('[data-bookmark-item]').forEach((item) => {
+      const itemTags = (item.dataset.tags || '').split(',').filter(Boolean);
+      const itemContribs = (item.dataset.contributors || '').split(',').filter(Boolean);
+      const tagOk = !activeTag || itemTags.includes(activeTag);
+      const contribOk = !activeContrib || itemContribs.includes(activeContrib);
+      item.hidden = !(tagOk && contribOk);
+    });
+  }
+
+  window.addEventListener('glyphrig:apply-filters', applyBookmarkFilters);
+
   // Inline tag filtering
   const tagButtons = document.querySelectorAll<HTMLButtonElement>('[data-filter-tag]');
   tagButtons.forEach((btn) => {
     btn.addEventListener('click', () => {
       const selected = btn.dataset.filterTag || '';
       tagButtons.forEach((b) => b.classList.toggle('is-active', b === btn));
-      document.querySelectorAll<HTMLElement>('[data-bookmark-item]').forEach((item) => {
-        if (!selected) {
-          item.hidden = false;
-          return;
-        }
-        const itemTags = (item.dataset.tags || '').split(',').filter(Boolean);
-        item.hidden = !itemTags.includes(selected);
-      });
+      if (collection) collection.dataset.activeTag = selected;
+      applyBookmarkFilters();
     });
   });
 

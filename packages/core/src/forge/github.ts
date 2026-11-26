@@ -15,6 +15,8 @@ import {
   type GitHubDeviceCodeResponse,
   type GitHubDeviceTokenPollResult,
   type GitHubTokenRefreshResult,
+  type ProposeChangesInput,
+  type ProposeChangesResult,
   type ReadBookmarkFilesResult,
   type RepoConnectionInfo,
 } from './types.js';
@@ -33,7 +35,19 @@ function resolveGitHubApiBase(instanceUrl?: string): string {
   return `${clean}/api/v3`;
 }
 
-function classifyHttpError(status: number, message: string): ForgeError {
+function classifyHttpError(
+  status: number,
+  message: string,
+  headers?: Headers,
+): ForgeError {
+  if (
+    status === 429 ||
+    (status === 403 &&
+      (headers?.get('x-ratelimit-remaining') === '0' ||
+        /rate limit/i.test(message)))
+  ) {
+    return new ForgeError(message, status, 'rate_limit');
+  }
   if (status === 401 || status === 403) {
     return new ForgeError(message, status, 'auth');
   }
@@ -42,9 +56,6 @@ function classifyHttpError(status: number, message: string): ForgeError {
   }
   if (status === 409 || status === 422) {
     return new ForgeError(message, status, 'conflict');
-  }
-  if (status === 429) {
-    return new ForgeError(message, status, 'rate_limit');
   }
   return new ForgeError(message, status, 'unknown');
 }
@@ -77,7 +88,7 @@ export class GitHubAdapter implements ForgeAdapter {
         ...init,
         headers: {
           Accept: 'application/vnd.github+json',
-          Authorization: `Bearer ${this.token}`,
+          ...(this.token ? { Authorization: `Bearer ${this.token}` } : {}),
           'X-GitHub-Api-Version': '2022-11-28',
           ...(init.body ? { 'Content-Type': 'application/json' } : {}),
           ...init.headers,
@@ -103,7 +114,7 @@ export class GitHubAdapter implements ForgeAdapter {
       } catch {
         // ignore JSON parse failure on error body
       }
-      throw classifyHttpError(res.status, msg);
+      throw classifyHttpError(res.status, msg, res.headers);
     }
 
     if (res.status === 204) {
@@ -335,6 +346,244 @@ export class GitHubAdapter implements ForgeAdapter {
     );
 
     return { commitSha: newCommit.sha };
+  }
+
+  private async commitProposalOnRepo(
+    targetOwner: string,
+    targetRepo: string,
+    proposalBranch: string,
+    baseSha: string,
+    message: string,
+    upserts: Map<string, string>,
+    deletes: string[],
+  ): Promise<string> {
+    const repoPrefix = `/repos/${encodeURIComponent(targetOwner)}/${encodeURIComponent(targetRepo)}`;
+
+    const { data: parentCommit } = await this.requestJson<{ tree: { sha: string } }>(
+      `${repoPrefix}/git/commits/${baseSha}`,
+    );
+    if (!parentCommit) {
+      throw new ForgeError('Base commit not found for proposal branch', 404, 'not_found');
+    }
+
+    const createdBlobs = await mapWithConcurrency(
+      [...upserts.entries()],
+      6,
+      async ([path, content]) => {
+        const { data } = await this.requestJson<{ sha: string }>(`${repoPrefix}/git/blobs`, {
+          method: 'POST',
+          body: JSON.stringify({ content, encoding: 'utf-8' }),
+        });
+        if (!data?.sha) {
+          throw new ForgeError(`Failed to create blob for ${path}`, 500, 'unknown');
+        }
+        return {
+          path,
+          mode: '100644' as const,
+          type: 'blob' as const,
+          sha: data.sha,
+        };
+      },
+    );
+
+    const deleteEntries = deletes.map((path) => ({
+      path,
+      mode: '100644' as const,
+      type: 'blob' as const,
+      sha: null,
+    }));
+
+    const { data: newTree } = await this.requestJson<{ sha: string }>(`${repoPrefix}/git/trees`, {
+      method: 'POST',
+      body: JSON.stringify({
+        base_tree: parentCommit.tree.sha,
+        tree: [...createdBlobs, ...deleteEntries],
+      }),
+    });
+    if (!newTree?.sha) {
+      throw new ForgeError('Failed to create proposal Git tree', 500, 'unknown');
+    }
+
+    const { data: newCommit } = await this.requestJson<{ sha: string }>(
+      `${repoPrefix}/git/commits`,
+      {
+        method: 'POST',
+        body: JSON.stringify({
+          message,
+          tree: newTree.sha,
+          parents: [baseSha],
+        }),
+      },
+    );
+    if (!newCommit?.sha) {
+      throw new ForgeError('Failed to create proposal Git commit', 500, 'unknown');
+    }
+
+    const refPath = `${repoPrefix}/git/refs/heads/${encodeRefPath(proposalBranch)}`;
+    const existingRef = await this.requestJson<{ object?: { sha?: string } }>(
+      `${repoPrefix}/git/ref/heads/${encodeRefPath(proposalBranch)}`,
+      {},
+      [404, 409],
+    );
+
+    if (existingRef.data?.object?.sha) {
+      await this.requestJson(refPath, {
+        method: 'PATCH',
+        body: JSON.stringify({ sha: newCommit.sha, force: true }),
+      });
+    } else {
+      await this.requestJson(`${repoPrefix}/git/refs`, {
+        method: 'POST',
+        body: JSON.stringify({
+          ref: `refs/heads/${proposalBranch}`,
+          sha: newCommit.sha,
+        }),
+      });
+    }
+
+    return newCommit.sha;
+  }
+
+  async proposeChanges(input: ProposeChangesInput): Promise<ProposeChangesResult> {
+    if (!this.token) {
+      throw new ForgeError(
+        'Authentication is required to propose bookmark changes via Pull Request.',
+        401,
+        'auth',
+      );
+    }
+
+    const baseSha = input.parentSha ?? (await this.getHeadSha(input.baseBranch));
+    if (!baseSha) {
+      throw new ForgeError(
+        `Base branch "${input.baseBranch}" does not exist yet.`,
+        404,
+        'not_found',
+      );
+    }
+
+    let headOwner = this.owner;
+    let commitSha: string;
+
+    try {
+      commitSha = await this.commitProposalOnRepo(
+        this.owner,
+        this.repo,
+        input.proposalBranch,
+        baseSha,
+        input.message,
+        input.upserts,
+        input.deletes,
+      );
+    } catch (err) {
+      const isWritePermissionDenial =
+        err instanceof ForgeError &&
+        err.code !== 'rate_limit' &&
+        (err.status === 403 || err.status === 404);
+      if (!isWritePermissionDenial) {
+        throw err;
+      }
+      // Contributor lacks direct push access: automatically fork, sync upstream, and propose cross-repo PR
+      const user = await this.getAuthenticatedUser();
+      const { data: forkData } = await this.requestJson<{
+        owner?: { login?: string };
+        name?: string;
+      }>(
+        `/repos/${encodeURIComponent(this.owner)}/${encodeURIComponent(this.repo)}/forks`,
+        { method: 'POST', body: JSON.stringify({}) },
+      );
+      headOwner = forkData?.owner?.login || user.username;
+      const forkRepo = forkData?.name || this.repo;
+      const forkPrefix = `/repos/${encodeURIComponent(headOwner)}/${encodeURIComponent(forkRepo)}`;
+
+      // Sync fork with upstream baseBranch if it already existed & lagged behind
+      await this.requestJson(
+        `${forkPrefix}/merge-upstream`,
+        {
+          method: 'POST',
+          body: JSON.stringify({ branch: input.baseBranch }),
+        },
+        [404, 409, 422],
+      );
+
+      // Wait briefly for newly created/synced fork to have baseSha available
+      for (let waitAttempt = 0; waitAttempt < 6; waitAttempt++) {
+        const probe = await this.requestJson<{ sha?: string }>(
+          `${forkPrefix}/git/commits/${baseSha}`,
+          {},
+          [404, 409],
+        );
+        if (probe.data) break;
+        await new Promise((resolve) => setTimeout(resolve, 1000));
+      }
+
+      commitSha = await this.commitProposalOnRepo(
+        headOwner,
+        forkRepo,
+        input.proposalBranch,
+        baseSha,
+        input.message,
+        input.upserts,
+        input.deletes,
+      );
+    }
+
+    const headSpec =
+      headOwner.toLowerCase() === this.owner.toLowerCase()
+        ? input.proposalBranch
+        : `${headOwner}:${input.proposalBranch}`;
+    const headQuery = `${headOwner}:${input.proposalBranch}`;
+    const upstreamPrefix = `/repos/${encodeURIComponent(this.owner)}/${encodeURIComponent(this.repo)}`;
+
+    const { data: existingPrs } = await this.requestJson<
+      Array<{ number: number; html_url: string }>
+    >(
+      `${upstreamPrefix}/pulls?state=open&head=${encodeURIComponent(headQuery)}&base=${encodeURIComponent(input.baseBranch)}`,
+      {},
+      [404],
+    );
+
+    const existing = existingPrs && existingPrs.length > 0 ? existingPrs[0] : undefined;
+    if (existing) {
+      const { data: updated } = await this.requestJson<{ number: number; html_url: string }>(
+        `${upstreamPrefix}/pulls/${existing.number}`,
+        {
+          method: 'PATCH',
+          body: JSON.stringify({
+            title: input.prTitle,
+            body: input.prBody,
+          }),
+        },
+      );
+      return {
+        commitSha,
+        proposalBranch: input.proposalBranch,
+        prUrl: updated?.html_url ?? existing.html_url,
+        prNumber: updated?.number ?? existing.number,
+        updatedExisting: true,
+      };
+    }
+
+    const { data: created } = await this.requestJson<{ number: number; html_url: string }>(
+      `${upstreamPrefix}/pulls`,
+      {
+        method: 'POST',
+        body: JSON.stringify({
+          title: input.prTitle,
+          body: input.prBody,
+          head: headSpec,
+          base: input.baseBranch,
+        }),
+      },
+    );
+
+    return {
+      commitSha,
+      proposalBranch: input.proposalBranch,
+      prUrl: created?.html_url ?? '',
+      ...(created?.number !== undefined ? { prNumber: created.number } : {}),
+      updatedExisting: false,
+    };
   }
 }
 

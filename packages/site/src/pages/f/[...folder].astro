@@ -4,6 +4,8 @@ import BookmarkItem from '../../components/BookmarkItem.astro';
 import ViewControls from '../../components/ViewControls.astro';
 import {
   collectTagsInBookmarks,
+  contributorHref,
+  folderFeedHref,
   folderHref,
   getFolderBreadcrumbs,
   siteData,
@@ -24,6 +26,8 @@ interface Props {
 const { folder } = Astro.props;
 const breadcrumbs = getFolderBreadcrumbs(folder);
 const folderTags = collectTagsInBookmarks(folder.bookmarks);
+const feedUrl = folderFeedHref(folder.path);
+const contributorSlugMap = new Map(siteData.contributors.map((c) => [c.username, c.slug]));
 ---
 
 <BaseLayout
@@ -31,6 +35,7 @@ const folderTags = collectTagsInBookmarks(folder.bookmarks);
   description={folder.description || `${folder.title} bookmarks`}
   activeNav="folder"
   activeFolderPath={folder.path}
+  extraFeed={{ title: `${folder.title} RSS`, href: feedUrl }}
 >
   <nav class="breadcrumbs" aria-label="Breadcrumbs">
     {breadcrumbs.map((crumb, idx) => (
@@ -46,8 +51,28 @@ const folderTags = collectTagsInBookmarks(folder.bookmarks);
   </nav>
 
   <header class="page-header">
-    <h1 class="page-title">{folder.title}</h1>
+    <div class="page-header-row">
+      <h1 class="page-title">{folder.title}</h1>
+      <a href={feedUrl} class="feed-pill" title={`RSS feed for ${folder.title}`}>
+        RSS
+      </a>
+    </div>
     {folder.description && <p class="page-subtitle">{folder.description}</p>}
+    {folder.maintainers && folder.maintainers.length > 0 && (
+      <div class="folder-maintainers">
+        <span>Maintained by</span>
+        {folder.maintainers.map((u) => {
+          const slug = contributorSlugMap.get(u);
+          return slug ? (
+            <a href={contributorHref(slug)} class="bm-contributor">
+              @{u}
+            </a>
+          ) : (
+            <span class="bm-contributor">@{u}</span>
+          );
+        })}
+      </div>
+    )}
   </header>
 
   {folder.introHtml && (

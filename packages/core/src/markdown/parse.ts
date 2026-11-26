@@ -38,6 +38,41 @@ export function mergeNotes(existing?: string, incoming?: string): string | undef
   return `${a} / ${additions.join(' / ')}`;
 }
 
+export function normalizeContributorNotes(
+  notes?: Record<string, string>,
+): Record<string, string> | undefined {
+  if (!notes) return undefined;
+  const entries = Object.entries(notes)
+    .map(([user, text]) => [normalizeUsername(user), text.trim().replace(/\s+/g, ' ')] as const)
+    .filter(([user, text]) => Boolean(user && text))
+    .sort((a, b) => a[0].localeCompare(b[0]));
+  if (entries.length === 0) return undefined;
+  return Object.fromEntries(entries);
+}
+
+export function mergeContributorNotes(
+  existing?: Record<string, string>,
+  incoming?: Record<string, string>,
+): Record<string, string> | undefined {
+  if (!existing && !incoming) return undefined;
+  const merged: Record<string, string> = {};
+  if (existing) {
+    for (const [u, text] of Object.entries(existing)) {
+      const cleanUser = normalizeUsername(u);
+      const cleanText = text.trim().replace(/\s+/g, ' ');
+      if (cleanUser && cleanText) merged[cleanUser] = cleanText;
+    }
+  }
+  if (incoming) {
+    for (const [u, text] of Object.entries(incoming)) {
+      const cleanUser = normalizeUsername(u);
+      const cleanText = text.trim().replace(/\s+/g, ' ');
+      if (cleanUser && cleanText) merged[cleanUser] = cleanText;
+    }
+  }
+  return normalizeContributorNotes(merged);
+}
+
 export function mergeBookmarkEntries(
   primary: BookmarkEntry,
   incoming: BookmarkEntry,
@@ -60,11 +95,18 @@ export function mergeBookmarkEntries(
   );
   addedCandidates.sort();
   const note = mergeNotes(primary.note, incoming.note);
+  const contributorNotes = mergeContributorNotes(
+    primary.contributorNotes,
+    incoming.contributorNotes,
+  );
+  const archiveUrl = incoming.archiveUrl?.trim() || primary.archiveUrl?.trim() || undefined;
 
   return {
     ...primary,
     ...(addedCandidates[0] ? { added: addedCandidates[0] } : {}),
     ...(note !== undefined ? { note } : {}),
+    ...(contributorNotes ? { contributorNotes } : {}),
+    ...(archiveUrl ? { archiveUrl } : {}),
     tags,
     ...(savedBy.length > 0 ? { savedBy } : {}),
   };
@@ -80,6 +122,7 @@ export interface ParsedFolderDocument {
   title?: string;
   order?: number;
   description?: string;
+  maintainers?: string[];
   extraFrontmatter: Record<string, unknown>;
   hasFrontmatter: boolean;
   introMarkdown?: string;
@@ -200,6 +243,7 @@ export function parseBookmarkLine(line: string, order = 0): BookmarkEntry | null
   let added: string | undefined;
   let savedBy: string[] = [];
   let archivedAt: string | undefined;
+  let archiveUrl: string | undefined;
 
   const commentMatch = tail.match(/(<!--\s*glyphrig:\s*.*?-->)\s*$/i);
   if (commentMatch && commentMatch[1]) {
@@ -212,6 +256,9 @@ export function parseBookmarkLine(line: string, order = 0): BookmarkEntry | null
     }
     if (meta.archived) {
       archivedAt = meta.archived;
+    }
+    if (meta.archive) {
+      archiveUrl = meta.archive;
     }
     tail = tail.slice(0, commentMatch.index).trim();
   }
@@ -251,8 +298,23 @@ export function parseBookmarkLine(line: string, order = 0): BookmarkEntry | null
     tags,
     ...(savedBy.length > 0 ? { savedBy } : {}),
     ...(archivedAt ? { archivedAt } : {}),
+    ...(archiveUrl ? { archiveUrl } : {}),
     order,
   };
+}
+
+export function parseContributorNoteLine(
+  line: string,
+): { username: string; note: string } | null {
+  const match = line.match(
+    /^[ \t]+[-*]\s+(?:\*\*@([a-zA-Z0-9._-]+)\*\*|@([a-zA-Z0-9._-]+))\s*:\s*(.+)$/,
+  );
+  if (!match) return null;
+  const rawUser = match[1] ?? match[2] ?? '';
+  const username = normalizeUsername(rawUser);
+  const note = (match[3] ?? '').trim().replace(/\s+/g, ' ');
+  if (!username || !note) return null;
+  return { username, note };
 }
 
 function splitFrontmatter(raw: string): {
@@ -308,14 +370,27 @@ export function parseFolderMarkdown(
   let title: string | undefined;
   let order: number | undefined;
   let description: string | undefined;
+  let maintainers: string[] | undefined;
 
   for (const [key, value] of Object.entries(frontmatter)) {
-    if (key === 'title' && typeof value === 'string') {
-      title = value;
-    } else if (key === 'order' && typeof value === 'number' && Number.isFinite(value)) {
-      order = value;
-    } else if (key === 'description' && typeof value === 'string') {
-      description = value;
+    if (key === 'title') {
+      if (typeof value === 'string') title = value;
+      else if (typeof value === 'number' || typeof value === 'boolean') title = String(value);
+    } else if (key === 'order') {
+      if (typeof value === 'number' && Number.isFinite(value)) order = value;
+      else if (typeof value === 'string' && Number.isFinite(Number(value))) order = Number(value);
+    } else if (key === 'description') {
+      if (typeof value === 'string') description = value;
+    } else if (key === 'maintainers') {
+      const list = Array.isArray(value)
+        ? value.filter((v): v is string => typeof v === 'string')
+        : typeof value === 'string'
+          ? value.split(',')
+          : [];
+      const clean = normalizeUserList(list);
+      if (clean.length > 0) {
+        maintainers = clean;
+      }
     } else {
       extraFrontmatter[key] = value;
     }
@@ -329,32 +404,75 @@ export function parseFolderMarkdown(
 
   const blocks: MarkdownBlock[] = [];
   const bookmarks: BookmarkEntry[] = [];
-  let inCodeFence = false;
+  let fenceChar: '`' | '~' | null = null;
+  let fenceLen = 0;
   let bookmarkOrder = 0;
+  let lastBookmarkBlock: Extract<MarkdownBlock, { type: 'bookmark' }> | null = null;
 
   for (const line of lines) {
     const trimmed = line.trim();
-    if (/^(?:```|~~~)/.test(trimmed)) {
-      inCodeFence = !inCodeFence;
+    if (fenceChar) {
+      const closeRe = new RegExp(`^${fenceChar}{${fenceLen},}\\s*$`);
+      if (closeRe.test(trimmed)) {
+        fenceChar = null;
+        fenceLen = 0;
+      }
+      lastBookmarkBlock = null;
       blocks.push({ type: 'prose', raw: line });
       continue;
     }
 
-    if (!inCodeFence && trimmed === '') {
-      blocks.push({ type: 'blank', raw: line });
-      continue;
-    }
-
-    if (!inCodeFence) {
-      const entry = parseBookmarkLine(line, bookmarkOrder);
-      if (entry) {
-        bookmarkOrder++;
-        bookmarks.push(entry);
-        blocks.push({ type: 'bookmark', raw: line, entry });
+    const openMatch = line.match(/^[ ]{0,3}(`{3,}|~{3,})(.*)$/);
+    if (openMatch && openMatch[1]) {
+      const marker = openMatch[1];
+      const info = openMatch[2] ?? '';
+      // CommonMark: backtick fence info strings cannot contain backticks (prevents inline ```foo``` false positives)
+      if (!(marker[0] === '`' && info.includes('`'))) {
+        fenceChar = marker[0] as '`' | '~';
+        fenceLen = marker.length;
+        lastBookmarkBlock = null;
+        blocks.push({ type: 'prose', raw: line });
         continue;
       }
     }
 
+    if (trimmed === '') {
+      lastBookmarkBlock = null;
+      blocks.push({ type: 'blank', raw: line });
+      continue;
+    }
+
+    if (lastBookmarkBlock) {
+      const contributorNote = parseContributorNoteLine(line);
+      if (contributorNote) {
+        lastBookmarkBlock.entry.contributorNotes = mergeContributorNotes(
+          lastBookmarkBlock.entry.contributorNotes,
+          { [contributorNote.username]: contributorNote.note },
+        );
+        lastBookmarkBlock.raw = `${lastBookmarkBlock.raw}\n${line}`;
+        continue;
+      }
+    }
+
+    const entry = parseBookmarkLine(line, bookmarkOrder);
+    if (entry) {
+      bookmarkOrder++;
+      bookmarks.push(entry);
+      const bmBlock: Extract<MarkdownBlock, { type: 'bookmark' }> = {
+        type: 'bookmark',
+        raw: line,
+        entry,
+      };
+      blocks.push(bmBlock);
+      lastBookmarkBlock = bmBlock;
+      continue;
+    }
+
+    // Keep lastBookmarkBlock active across indented non-contributor sub-lines so
+    // subsequent indented **@user** notes still attach to the parent bookmark.
+    if (!/^(?:[ ]{2,}|\t)/.test(line)) {
+      lastBookmarkBlock = null;
+    }
     blocks.push({ type: 'prose', raw: line });
   }
 
@@ -373,6 +491,7 @@ export function parseFolderMarkdown(
     ...(title !== undefined ? { title } : {}),
     ...(order !== undefined ? { order } : {}),
     ...(description !== undefined ? { description } : {}),
+    ...(maintainers && maintainers.length > 0 ? { maintainers } : {}),
     extraFrontmatter,
     hasFrontmatter,
     ...(introTrimmed ? { introMarkdown: introTrimmed } : {}),
@@ -461,6 +580,9 @@ export function parseBookmarkRepoFiles(
     node.order = doc.order ?? 0;
     if (doc.description !== undefined) {
       node.description = doc.description;
+    }
+    if (doc.maintainers && doc.maintainers.length > 0) {
+      node.maintainers = [...doc.maintainers];
     }
     if (doc.introMarkdown !== undefined) {
       node.introMarkdown = doc.introMarkdown;

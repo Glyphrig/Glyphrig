@@ -6,12 +6,24 @@ import type { ForgeKind } from '@glyphrig/core';
 import { Command } from 'commander';
 import { buildSite, devSite } from './astro-runner.js';
 import {
+  formatBookmarksDigest,
+  generateBookmarksDigest,
+  postDigestWebhook,
+  type DigestFormat,
+} from './digest.js';
+import { importBookmarksFromFile, type ImportFormat } from './importers.js';
+import {
   INIT_CI_PROVIDERS,
   initBookmarkRepo,
   type InitCiProvider,
   type InitQuickAddOptions,
 } from './init.js';
-import { validateBookmarksRepo } from './loader.js';
+import { checkBookmarkLinks } from './link-health.js';
+import {
+  applyAutoTagRulesToRepo,
+  formatValidationPrComment,
+  validateBookmarksRepo,
+} from './loader.js';
 import { BUILTIN_THEMES, ejectDefaultTheme, scaffoldTheme } from './theme.js';
 
 const program = new Command();
@@ -338,24 +350,146 @@ program
   .description('Validate glyphrig.config.yaml and bookmarks/**/README.md files')
   .option('-i, --input <dir>', 'Bookmarks root directory', 'bookmarks')
   .option('-c, --config <file>', 'Path to glyphrig.config.yaml')
+  .option('--comment-markdown', 'Print a Markdown PR review summary to stdout', false)
   .action(async (opts) => {
     const report = await validateBookmarksRepo({
       inputDir: opts.input,
       configPath: opts.config,
     });
 
+    if (opts.commentMarkdown) {
+      console.log(formatValidationPrComment(report));
+      if (!report.valid) {
+        process.exitCode = 1;
+      }
+      return;
+    }
+
     for (const w of report.warnings) {
       console.warn(`WARN: ${w}`);
+    }
+    for (const d of report.duplicates) {
+      console.warn(`DUP: ${d.url} appears in ${d.folders.join(', ')}`);
     }
     for (const e of report.errors) {
       console.error(`ERROR: ${e}`);
     }
     console.log(
-      `Validated ${report.bookmarkCount} bookmarks across ${report.folderCount} folders (${report.errors.length} errors, ${report.warnings.length} warnings).`,
+      `Validated ${report.bookmarkCount} bookmarks across ${report.folderCount} folders (${report.errors.length} errors, ${report.warnings.length} warnings, ${report.duplicates.length} cross-folder duplicates).`,
     );
     if (!report.valid) {
       process.exitCode = 1;
     }
+  });
+
+program
+  .command('import')
+  .argument('<file>', 'Bookmark export file (Netscape HTML, Raindrop CSV, Pinboard/Linkding/Karakeep JSON, Pocket CSV)')
+  .description('Import bookmarks from other tools through Glyphrig safety rails and deduplication')
+  .option('-i, --input <dir>', 'Target bookmarks root directory', 'bookmarks')
+  .option('-c, --config <file>', 'Path to glyphrig.config.yaml')
+  .option(
+    '-f, --format <format>',
+    'Source format (auto|netscape|raindrop|pinboard|pocket|linkding|karakeep)',
+    'auto',
+  )
+  .option('--folder <path>', 'Import into a subfolder path (e.g. imported/raindrop)')
+  .option('--user <handle>', 'Attribute imported bookmarks to this contributor username')
+  .option('--dry-run', 'Preview import counts without writing files', false)
+  .action(async (file: string, opts) => {
+    const res = await importBookmarksFromFile({
+      sourceFile: file,
+      inputDir: opts.input,
+      configPath: opts.config,
+      format: opts.format as ImportFormat,
+      targetFolder: opts.folder,
+      user: opts.user,
+      dryRun: Boolean(opts.dryRun),
+    });
+    console.log(
+      `${opts.dryRun ? '[dry-run] ' : ''}Imported (${res.detectedFormat}): ${res.added} added, ${res.merged} merged, ${res.skippedUnsafe} skipped unsafe (parsed ${res.totalParsed}) -> ${res.filesWritten.length} file(s).`,
+    );
+  });
+
+program
+  .command('check-links')
+  .description('Check bookmark link health and look up Wayback Machine snapshots')
+  .option('-i, --input <dir>', 'Bookmarks root directory', 'bookmarks')
+  .option('--cache-dir <dir>', 'Cache directory for link-health.json', '.glyphrig-cache')
+  .option('--concurrency <n>', 'Concurrent link checks', '8')
+  .option('--timeout <ms>', 'Request timeout in milliseconds', '6000')
+  .option('--no-wayback', 'Skip Wayback Machine snapshot lookups for dead links')
+  .option('--submit-wayback', 'Submit live unarchived bookmarks to Wayback Machine Save Page Now', false)
+  .option('--write-archives', 'Persist discovered Wayback archive URLs into bookmarks/**/README.md', false)
+  .option('--json', 'Print full JSON report to stdout', false)
+  .action(async (opts) => {
+    const report = await checkBookmarkLinks({
+      inputDir: opts.input,
+      cacheDir: opts.cacheDir,
+      concurrency: Number.parseInt(opts.concurrency, 10) || 8,
+      timeoutMs: Number.parseInt(opts.timeout, 10) || 6000,
+      lookupWayback: opts.wayback !== false,
+      submitWayback: Boolean(opts.submitWayback),
+      writeArchives: Boolean(opts.writeArchives),
+    });
+    if (opts.json) {
+      console.log(JSON.stringify(report, null, 2));
+      return;
+    }
+    console.log(
+      `Checked ${report.checked} URL(s): ${report.ok} ok, ${report.dead} dead, ${report.waybackFound} archived snapshot(s), ${report.skippedUnsafe} skipped unsafe.`,
+    );
+    for (const item of report.results.filter((r) => r.status === 'dead')) {
+      console.log(
+        `  DEAD [${item.httpStatus ?? item.error ?? 'error'}] ${item.url}${item.waybackUrl ? ` -> archive: ${item.waybackUrl}` : ''}`,
+      );
+    }
+    if (report.filesUpdated.length > 0) {
+      console.log(`Updated archive metadata in ${report.filesUpdated.length} Markdown file(s).`);
+    }
+  });
+
+program
+  .command('digest')
+  .description('Generate a team bookmark digest for Markdown, Slack, Discord, Matrix, or JSON')
+  .option('-i, --input <dir>', 'Bookmarks root directory', 'bookmarks')
+  .option('-c, --config <file>', 'Path to glyphrig.config.yaml')
+  .option('--days <n>', 'Lookback window in days', '7')
+  .option('--limit <n>', 'Maximum links to include', '15')
+  .option('--format <fmt>', 'Output format (markdown|slack|discord|matrix|json)', 'markdown')
+  .option('--webhook <url>', 'Optional webhook URL to POST the formatted digest')
+  .action(async (opts) => {
+    const format = String(opts.format || 'markdown').toLowerCase() as DigestFormat;
+    const data = await generateBookmarksDigest({
+      inputDir: opts.input,
+      configPath: opts.config,
+      days: Number.parseInt(opts.days, 10) || 7,
+      limit: Number.parseInt(opts.limit, 10) || 15,
+    });
+    const output = formatBookmarksDigest(data, format);
+    if (opts.webhook) {
+      await postDigestWebhook(String(opts.webhook), format, output);
+      console.log(`Posted ${format} digest (${data.recentBookmarks.length} recent links) to webhook.`);
+    } else {
+      process.stdout.write(output);
+    }
+  });
+
+program
+  .command('auto-tag')
+  .description('Apply declarative enrichment.autoTagRules from glyphrig.config.yaml to bookmark Markdown files')
+  .option('-i, --input <dir>', 'Bookmarks root directory', 'bookmarks')
+  .option('-c, --config <file>', 'Path to glyphrig.config.yaml')
+  .option('--write', 'Write updated tags back into bookmarks/**/README.md', false)
+  .action(async (opts) => {
+    const res = await applyAutoTagRulesToRepo({
+      inputDir: opts.input,
+      configPath: opts.config,
+      write: Boolean(opts.write),
+    });
+    console.log(
+      `${opts.write ? '' : '[dry-run] '}Applied ${res.rulesCount} rule(s): ${res.bookmarksUpdated} bookmark(s) updated across ${res.filesUpdated.length} file(s).`,
+    );
   });
 
 program.parseAsync(process.argv).catch((err) => {

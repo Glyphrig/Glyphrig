@@ -1,0 +1,173 @@
+---
+import { encodeGlyphrigInvite, type GlyphrigGardenManifest } from '@glyphrig/core';
+import {
+  getEffectiveCollaborationConfig,
+  safeJsonForScript,
+  siteData,
+  toAbsoluteUrl,
+  withBase,
+} from '../lib/data.js';
+
+const collab = getEffectiveCollaborationConfig();
+const resolvedSiteUrl = siteData.config.site.url ? toAbsoluteUrl('') : undefined;
+const manifestUrl = toAbsoluteUrl('glyphrig.json');
+
+const baseManifest: GlyphrigGardenManifest | null = collab
+  ? {
+      version: 1,
+      title: siteData.config.site.title,
+      description: siteData.config.site.description,
+      ...(resolvedSiteUrl ? { siteUrl: resolvedSiteUrl } : {}),
+      forge: collab.forge,
+      ...(collab.instanceUrl ? { instanceUrl: collab.instanceUrl } : {}),
+      owner: collab.owner,
+      repo: collab.repo,
+      branch: collab.branch,
+      rootDir: collab.rootDir,
+      recommendedSyncMode: collab.recommendedSyncMode ?? 'subscribe-only',
+    }
+  : null;
+
+const inviteCodes = baseManifest
+  ? {
+      'subscribe-only': encodeGlyphrigInvite({
+        ...baseManifest,
+        recommendedSyncMode: 'subscribe-only',
+      }),
+      'contribute-only': encodeGlyphrigInvite({
+        ...baseManifest,
+        recommendedSyncMode: 'contribute-only',
+      }),
+      'propose-pr': encodeGlyphrigInvite({
+        ...baseManifest,
+        recommendedSyncMode: 'propose-pr',
+      }),
+      'two-way': encodeGlyphrigInvite({
+        ...baseManifest,
+        recommendedSyncMode: 'two-way',
+      }),
+    }
+  : null;
+---
+
+<dialog id="glyphrig-join-dialog" class="glyphrig-dialog" aria-labelledby="glyphrig-join-title">
+  <div class="dialog-head">
+    <h2 id="glyphrig-join-title" class="dialog-title">Sync or Subscribe to This Garden</h2>
+    <button type="button" class="pill-btn" data-close-join>Close</button>
+  </div>
+  <div class="dialog-body">
+    {inviteCodes && collab ? (
+      <>
+        <p class="status-note">
+          Connect <strong>{collab.owner}/{collab.repo}</strong> directly to your browser bookmarks bar using the{' '}
+          <a
+            href="https://chromewebstore.google.com/detail/glyphrig/ennpigbnodfiobgblonmckfeonnagjeg"
+            target="_blank"
+            rel="noopener noreferrer"
+          >
+            Glyphrig browser extension
+          </a>.
+        </p>
+
+        <div class="field">
+          <label for="join-mode-select">How do you want to connect?</label>
+          <select id="join-mode-select">
+            <option value="subscribe-only" selected={collab.recommendedSyncMode === 'subscribe-only' || !collab.recommendedSyncMode}>
+              Subscribe Only (Read-Only — no token needed for public repos)
+            </option>
+            <option value="propose-pr" selected={collab.recommendedSyncMode === 'propose-pr'}>
+              Propose via Pull Request (Contribute with maintainer review)
+            </option>
+            <option value="contribute-only" selected={collab.recommendedSyncMode === 'contribute-only'}>
+              Contribute Only (Push your links without pulling teammates' links)
+            </option>
+            <option value="two-way" selected={collab.recommendedSyncMode === 'two-way'}>
+              Two-Way Sync (Full team mirror)
+            </option>
+          </select>
+        </div>
+
+        <div class="field">
+          <label for="join-invite-input">1-Click Invite Code (paste in Glyphrig Settings → Join a Garden)</label>
+          <div class="join-copy-row">
+            <input
+              id="join-invite-input"
+              type="text"
+              readonly
+              value={inviteCodes[collab.recommendedSyncMode ?? 'subscribe-only']}
+            />
+            <button type="button" id="join-copy-btn" class="pill-btn pill-btn-primary">
+              Copy Invite
+            </button>
+          </div>
+          <p id="join-copy-status" class="status-note" aria-live="polite"></p>
+        </div>
+
+        <div class="field">
+          <label for="join-manifest-url">Garden Discovery Manifest URL</label>
+          <input id="join-manifest-url" type="text" readonly value={manifestUrl} />
+        </div>
+
+        <script
+          type="application/json"
+          id="glyphrig-join-codes"
+          set:html={safeJsonForScript(inviteCodes)}
+        />
+      </>
+    ) : (
+      <p class="status-note">
+        Subscribe to updates from <strong>{siteData.config.site.title}</strong> via RSS or JSON Feed, or install the Glyphrig extension to host your own Git-synced garden.
+      </p>
+    )}
+
+    <div class="join-feeds-row">
+      <a href={withBase('rss.xml')} class="pill-btn">RSS Feed</a>
+      <a href={withBase('feed.json')} class="pill-btn">JSON Feed</a>
+      <a href={withBase('glyphrig.json')} class="pill-btn">glyphrig.json</a>
+    </div>
+  </div>
+</dialog>
+
+<script>
+  const joinDialog = document.getElementById('glyphrig-join-dialog') as HTMLDialogElement | null;
+  const modeSelect = document.getElementById('join-mode-select') as HTMLSelectElement | null;
+  const inviteInput = document.getElementById('join-invite-input') as HTMLInputElement | null;
+  const copyBtn = document.getElementById('join-copy-btn') as HTMLButtonElement | null;
+  const copyStatus = document.getElementById('join-copy-status');
+  const codesEl = document.getElementById('glyphrig-join-codes');
+  const codes: Record<string, string> = codesEl?.textContent
+    ? (JSON.parse(codesEl.textContent) as Record<string, string>)
+    : {};
+
+  document.querySelectorAll('[data-open-join]').forEach((el) => {
+    el.addEventListener('click', () => {
+      if (joinDialog && !joinDialog.open) joinDialog.showModal();
+    });
+  });
+  document.querySelectorAll('[data-close-join]').forEach((el) => {
+    el.addEventListener('click', () => joinDialog?.close());
+  });
+  joinDialog?.addEventListener('click', (e) => {
+    if (e.target === joinDialog) joinDialog.close();
+  });
+
+  modeSelect?.addEventListener('change', () => {
+    const nextCode = codes[modeSelect.value];
+    if (nextCode && inviteInput) {
+      inviteInput.value = nextCode;
+    }
+    if (copyStatus) copyStatus.textContent = '';
+  });
+
+  copyBtn?.addEventListener('click', async () => {
+    if (!inviteInput) return;
+    try {
+      await navigator.clipboard.writeText(inviteInput.value);
+      if (copyStatus) copyStatus.textContent = 'Copied invite code! Paste it in Glyphrig Settings.';
+    } catch {
+      inviteInput.select();
+      document.execCommand('copy');
+      if (copyStatus) copyStatus.textContent = 'Invite code selected & copied.';
+    }
+  });
+</script>

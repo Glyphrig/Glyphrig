@@ -1,6 +1,6 @@
 export type ForgeKind = 'github' | 'gitlab' | 'forgejo';
 
-export type SyncMode = 'two-way' | 'contribute-only';
+export type SyncMode = 'two-way' | 'contribute-only' | 'subscribe-only' | 'propose-pr';
 
 export interface BookmarkEntry {
   title: string;
@@ -8,9 +8,11 @@ export interface BookmarkEntry {
   normalizedUrl: string;
   added?: string;
   note?: string;
+  contributorNotes?: Record<string, string>;
   tags: string[];
   savedBy?: string[];
   archivedAt?: string;
+  archiveUrl?: string;
   order: number;
 }
 
@@ -20,9 +22,43 @@ export interface FolderNode {
   title: string;
   order: number;
   description?: string;
+  maintainers?: string[];
   introMarkdown?: string;
   bookmarks: BookmarkEntry[];
   children: FolderNode[];
+}
+
+export interface PendingBookmarkAnnotation {
+  url: string;
+  normalizedUrl: string;
+  folderPath?: string;
+  title?: string;
+  note?: string;
+  contributorNote?: string;
+  tags?: string[];
+  archiveUrl?: string;
+  updatedAt: string;
+}
+
+export interface AutoTagRule {
+  match: string;
+  tags: string[];
+}
+
+export interface GlyphrigGardenManifest {
+  version: 1;
+  title: string;
+  description?: string;
+  siteUrl?: string;
+  forge: ForgeKind;
+  instanceUrl?: string;
+  owner: string;
+  repo: string;
+  branch: string;
+  rootDir: string;
+  recommendedSyncMode?: SyncMode;
+  bookmarkCount?: number;
+  contributorCount?: number;
 }
 
 export interface BookmarkTree {
@@ -75,12 +111,20 @@ export type ConflictKind =
 export interface ConflictRecord {
   id: string;
   timestamp: string;
+  profileId?: string;
   folderPath: string;
   url: string;
   kind: ConflictKind;
   resolution: 'kept-edited' | 'remote-won';
   localSummary: string;
   remoteSummary: string;
+  localTitle?: string;
+  remoteTitle?: string;
+  localFolderPath?: string;
+  remoteFolderPath?: string;
+  deletedSide?: 'local' | 'remote';
+  resolved?: boolean;
+  resolvedChoice?: 'local' | 'remote' | 'merged' | 'dismissed';
 }
 
 export interface SharedGitHubAccount {
@@ -129,6 +173,7 @@ export interface SyncSnapshot {
   lastSyncedCommitSha: string | null;
   lastSyncedAt: string;
   lastSyncedTree: BookmarkTree;
+  lastRemoteTree?: BookmarkTree;
 }
 
 export interface SyncDiffSummary {
@@ -161,4 +206,7 @@ export interface SyncResult {
   cleanedUrls: CleanedUrlRecord[];
   upserts: string[];
   deletes: string[];
+  pullRequestUrl?: string;
+  pullRequestNumber?: number;
+  proposalBranch?: string;
 }

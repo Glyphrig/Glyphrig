@@ -50,41 +50,88 @@ import { withBase } from '../lib/data.js';
 
   let pagefindInstance: PagefindApi | null = null;
   let feedFallback: FeedItem[] | null = null;
-  let loadAttempted = false;
+  let loadPromise: Promise<void> | null = null;
 
-  async function ensureSearchBackend(): Promise<void> {
-    if (loadAttempted || !dialog) return;
-    loadAttempted = true;
-    const pagefindUrl = dialog.dataset.pagefindUrl || '/pagefind/pagefind.js';
+  function isSafeHref(raw: string): boolean {
+    if (!raw) return false;
+    if (raw.startsWith('/') && !raw.startsWith('//')) return true;
     try {
-      const mod = (await import(/* @vite-ignore */ pagefindUrl)) as PagefindApi;
-      if (mod.init) await mod.init();
-      pagefindInstance = mod;
+      const parsed = new URL(raw, window.location.origin);
+      return parsed.protocol === 'https:' || parsed.protocol === 'http:';
     } catch {
-      const feedUrl = dialog.dataset.feedUrl || '/feed.json';
-      try {
-        const res = await fetch(feedUrl);
-        if (res.ok) {
-          const json = (await res.json()) as { items?: FeedItem[] };
-          feedFallback = json.items ?? [];
-        }
-      } catch {
-        feedFallback = [];
-      }
+      return false;
     }
   }
 
+  function appendSafeExcerpt(container: HTMLElement, rawText: string, allowMarkTags: boolean): void {
+    if (!allowMarkTags) {
+      container.textContent = rawText;
+      return;
+    }
+    const parser = new DOMParser();
+    const doc = parser.parseFromString(`<div>${rawText}</div>`, 'text/html');
+    const root = doc.body.firstElementChild;
+    if (!root) {
+      container.textContent = rawText;
+      return;
+    }
+    const walk = (node: Node, target: HTMLElement): void => {
+      for (const child of Array.from(node.childNodes)) {
+        if (child.nodeType === Node.TEXT_NODE) {
+          target.append(document.createTextNode(child.textContent ?? ''));
+        } else if (child.nodeType === Node.ELEMENT_NODE) {
+          const el = child as Element;
+          if (el.tagName.toLowerCase() === 'mark') {
+            const mark = document.createElement('mark');
+            mark.textContent = el.textContent ?? '';
+            target.append(mark);
+          } else {
+            walk(el, target);
+          }
+        }
+      }
+    };
+    walk(root, container);
+  }
+
+  async function ensureSearchBackend(): Promise<void> {
+    if (!dialog) return;
+    if (!loadPromise) {
+      loadPromise = (async () => {
+        const pagefindUrl = dialog.dataset.pagefindUrl || '/pagefind/pagefind.js';
+        try {
+          const mod = (await import(/* @vite-ignore */ pagefindUrl)) as PagefindApi;
+          if (mod.init) await mod.init();
+          pagefindInstance = mod;
+        } catch {
+          const feedUrl = dialog.dataset.feedUrl || '/feed.json';
+          try {
+            const res = await fetch(feedUrl);
+            if (res.ok) {
+              const json = (await res.json()) as { items?: FeedItem[] };
+              feedFallback = json.items ?? [];
+            }
+          } catch {
+            feedFallback = [];
+          }
+        }
+      })();
+    }
+    return loadPromise;
+  }
+
   function renderEntries(
-    entries: Array<{ title: string; href: string; snippet: string }>,
+    entries: Array<{ title: string; href: string; snippet: string; allowMark?: boolean }>,
   ): void {
     if (!resultsEl || !statusEl) return;
-    resultsEl.innerHTML = '';
-    if (entries.length === 0) {
+    resultsEl.textContent = '';
+    const safeEntries = entries.filter((e) => isSafeHref(e.href));
+    if (safeEntries.length === 0) {
       statusEl.textContent = 'No matching bookmarks found.';
       return;
     }
-    statusEl.textContent = `${entries.length} result${entries.length === 1 ? '' : 's'}`;
-    for (const item of entries) {
+    statusEl.textContent = `${safeEntries.length} result${safeEntries.length === 1 ? '' : 's'}`;
+    for (const item of safeEntries) {
       const link = document.createElement('a');
       link.className = 'search-result-card';
       link.href = item.href;
@@ -92,7 +139,7 @@ import { withBase } from '../lib/data.js';
       strong.textContent = item.title;
       const snippet = document.createElement('div');
       snippet.className = 'status-note';
-      snippet.innerHTML = item.snippet;
+      appendSafeExcerpt(snippet, item.snippet, Boolean(item.allowMark));
       link.append(strong, snippet);
       resultsEl.append(link);
     }
@@ -105,7 +152,7 @@ import { withBase } from '../lib/data.js';
     debounceHandle = window.setTimeout(async () => {
       const q = input.value.trim();
       if (!q) {
-        if (resultsEl) resultsEl.innerHTML = '';
+        if (resultsEl) resultsEl.textContent = '';
         if (statusEl) statusEl.textContent = 'Type a query to search across all folders.';
         return;
       }
@@ -120,6 +167,7 @@ import { withBase } from '../lib/data.js';
             title: r.meta?.title || r.url,
             href: r.url,
             snippet: r.excerpt || r.url,
+            allowMark: Boolean(r.excerpt),
           })),
         );
         return;
@@ -136,6 +184,7 @@ import { withBase } from '../lib/data.js';
           title: item.title || item.url,
           href: item.url,
           snippet: item.content_text || item.url,
+          allowMark: false,
         }));
       renderEntries(matched);
     }, 120);

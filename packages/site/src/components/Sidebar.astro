@@ -1,6 +1,6 @@
 ---
 import FolderTreeNav from './FolderTreeNav.astro';
-import { siteData, withBase } from '../lib/data.js';
+import { isQuickAddUiEnabled, siteData, withBase } from '../lib/data.js';
 
 interface Props {
   activeNav: 'home' | 'recent' | 'popular' | 'tags' | 'contributors' | 'folder';
@@ -8,6 +8,7 @@ interface Props {
 }
 
 const { activeNav, activeFolderPath } = Astro.props;
+const showQuickAddBtn = isQuickAddUiEnabled();
 ---
 
 <aside class="sidebar" id="glyphrig-sidebar" aria-label="Navigation">
@@ -81,6 +82,17 @@ const { activeNav, activeFolderPath } = Astro.props;
       />
     </nav>
   )}
+
+  <div class="sidebar-actions">
+    <button type="button" class="pill-btn sidebar-action-btn" data-open-join>
+      Join / Sync
+    </button>
+    {showQuickAddBtn && (
+      <button type="button" class="pill-btn sidebar-action-btn" data-open-quickadd>
+        + Add Link
+      </button>
+    )}
+  </div>
 
   <div class="sidebar-footer">
     <a href={withBase('rss.xml')}>RSS</a>

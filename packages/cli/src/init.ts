@@ -237,8 +237,8 @@ function buildConfigYaml(opts: {
     : {
         enabled: false,
         forge: 'github',
-        owner: 'your-username',
-        repo: 'glyphrig_bookmarks',
+        owner: '',
+        repo: '',
         branch: 'main',
         rootDir: 'bookmarks',
       };

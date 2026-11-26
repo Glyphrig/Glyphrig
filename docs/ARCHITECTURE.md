@@ -32,18 +32,20 @@ Glyphrig is a two-way multi-browser bookmark synchronization extension paired wi
 ## 2. Monorepo Packages
 
 - **`packages/core` (`@glyphrig/core`)**: Zero-Node-dependency core library shared across browser extensions, the Astro PWA client island, and the Node CLI.
-- **`packages/site` (`@glyphrig/site`)**: Astro static site template implementing the Editorial Digital Garden theme, nested folder/tag/popular/contributor pages, Pagefind search modal, RSS/JSON feeds, and PWA Quick Add drawer.
-- **`packages/cli` (`@glyphrig/cli`)**: Published CLI (`glyphrig init | build | dev | validate | theme`) that scaffolds data-only bookmark repos, resolves built-in or user-supplied CSS/Astro themes (see [THEMING.md](./THEMING.md)), validates `glyphrig.config.yaml`, parses `bookmarks/**/README.md`, enriches URLs with disk caching, injects data via `virtual:glyphrig-data` / `virtual:glyphrig-helpers` / `virtual:glyphrig-theme.css` into Astro without mutating `node_modules`, and emits the static site + Pagefind index + `sw.js`.
-- **`apps/extension` (`@glyphrig/extension`)**: WXT MV3 browser extension targeting Desktop Chrome, Desktop Firefox, and Firefox for Android (`gecko_android`).
+- **`packages/site` (`@glyphrig/site`)**: Astro static site template implementing the Editorial Digital Garden theme, nested folder/tag/popular/contributor pages, `glyphrig.json` 1-click garden discovery, granular per-folder/tag/contributor RSS feeds, Pagefind search modal, archived-link badges, and PWA Quick Add / Suggest-a-Link drawer.
+- **`packages/cli` (`@glyphrig/cli`)**: Published CLI (`glyphrig init | build | dev | validate | import | check-links | digest | auto-tag | theme`) that scaffolds data-only bookmark repos, imports from external tools, checks link health with Wayback Machine lookup, builds team digests, applies declarative auto-tag rules, enriches URLs with disk caching, and emits the static site + Pagefind index + `sw.js`.
+- **`apps/extension` (`@glyphrig/extension`)**: WXT MV3 browser extension targeting Desktop Chrome, Desktop Firefox, Firefox for Android (`gecko_android`), and Edge, with local page-match team awareness, rich popup annotation (`Alt+Shift+B`), 1-click garden invite import, and an interactive conflict resolver.
 
 ## 3. Markdown-per-Folder Data Contract
 
 - Every synced folder maps to `bookmarks/<slug-path>/README.md` (root folder: `bookmarks/README.md`).
 - Directory slugs are lowercase ASCII URL-safe strings (`Dev Tools & CLI` -> `dev-tools-cli`), with deterministic `-2`, `-3` suffixes for sibling collisions.
-- YAML frontmatter preserves exact `title`, sibling `order`, and any extra user-authored metadata (`description`, etc.).
-- Bookmark line syntax:
+- YAML frontmatter preserves exact `title`, sibling `order`, optional `maintainers`, and any extra user-authored metadata (`description`, etc.).
+- Bookmark line syntax (with optional indented per-contributor sub-notes and `archive=` Wayback URLs):
   ```markdown
-  - [Astro](https://astro.build) — Fast static site framework `#web` `#ssg` <!-- glyphrig: added=2026-11-21 by=alice,bob -->
+  - [Astro](https://astro.build) — Fast static site framework `#web` `#ssg` <!-- glyphrig: added=2026-11-21 by=alice,bob archive=https://web.archive.org/web/... -->
+    - **@alice**: Best zero-JS content islands
+    - **@bob**: Used this for our team docs
   ```
 - Surrounding hand-written prose blocks, comments, and bookmark notes/tags are preserved round-trip across two-way browser syncs.
 - Deletions are non-destructive: when a bookmark has no remaining contributors saving it, it moves to `<folder>/.archived/README.md` with `archived=YYYY-MM-DD` metadata rather than being permanently deleted (and is excluded from the public static site).
@@ -55,13 +57,15 @@ Glyphrig is a two-way multi-browser bookmark synchronization extension paired wi
 3. **Tracking-parameter stripping**: Strips `utm_*`, `fbclid`, `gclid`, `si`, etc., updating the local browser URL under echo suppression so diffs stay clean.
 4. **First-sync dry-run preview**: New profiles run a dry-run merge and show exact pushes, pulls, archives, and skipped URLs before committing.
 
-Profiles support two sync modes:
+Profiles support four sync modes:
 - **`two-way` (default)**: Mirrors the shared repository and the chosen browser folder cleanly in both directions.
-- **`contribute-only`**: Pushes the user's own additions, attribution, and un-saves into the shared repository without pulling teammates' links into the user's browser folder or deleting teammates' links.
+- **`contribute-only`**: Pushes the user's own additions, attribution, notes, and un-saves into the shared repository without pulling teammates' links into the user's browser folder or deleting teammates' links.
+- **`subscribe-only`**: Mirrors a public or team repository read-only into a local browser folder without ever pushing back—no access token required for public repositories.
+- **`propose-pr`**: Pushes contributions to a `glyphrig/<username>` branch (automatically forking on GitHub if direct push is forbidden) and opens or updates a Pull Request / Merge Request for maintainer review.
 
-When multiple collaborators save the same normalized URL, Glyphrig merges their contributor handles (`by=alice,bob`), unions `#tags`, combines distinct notes idempotently, and preserves the earliest `added` date. The static site ranks unique URLs across folders on `/popular/` and groups each contributor's links on `/u/<username>/`.
+When multiple collaborators save the same normalized URL, Glyphrig merges their contributor handles (`by=alice,bob`), preserves per-contributor sub-notes cleanly per username, unions `#tags`, combines distinct shared notes idempotently, and preserves the earliest `added` date. The static site ranks unique URLs across folders on `/popular/` and groups each contributor's links on `/u/<username>/`.
 
 Conflict resolution uses a 3-way merge against `{ lastSyncedCommitSha, lastSyncedTree }`:
 - Edit vs. Delete -> **keep edited bookmark** (`kept-edited`).
 - Edit vs. Edit (title or destination folder) -> **remote wins** (`remote-won`).
-- All conflicts are logged to local sync history.
+- All conflicts are logged to local sync history and can be overridden interactively in Settings (**Keep Mine / Keep Theirs / Merge Both**).

@@ -7,9 +7,12 @@ vi.mock('wxt/browser', () => ({
 import { normalizeUrl, type BookmarkTree } from '@glyphrig/core';
 import {
   applyTreeToBrowser,
+  deleteBrowserBookmarkInPath,
+  ensureBrowserBookmarkInPath,
   isDescendantOfFolder,
   listSelectableFolders,
   readBrowserSubtree,
+  renameBrowserSubfolder,
   type BookmarksApi,
   type BrowserBookmarkNode,
 } from '../src/lib/browser-tree.js';
@@ -290,5 +293,86 @@ describe('browser bookmark tree adapter', () => {
     expect(after.root.children[0]?.bookmarks.map((b) => b.url)).toEqual([
       'https://developer.mozilla.org',
     ]);
+  });
+
+  it('reorders bookmarks accurately around Firefox separators and resolves colliding folder slugs', async () => {
+    const api = createMemoryBookmarksApi([
+      {
+        id: 'root________',
+        title: '',
+        children: [
+          {
+            id: 'toolbar_____',
+            title: 'Bookmarks Toolbar',
+            children: [
+              {
+                id: 'pub',
+                title: 'Public',
+                children: [
+                  { id: 'sep1', title: '', type: 'separator' },
+                  { id: 'bm-b', title: 'Second', url: 'https://example.org/b' },
+                  { id: 'bm-a', title: 'First', url: 'https://example.org/a' },
+                  { id: 'f1', title: 'Tools', children: [] },
+                  { id: 'f2', title: 'Tools!', children: [] },
+                ],
+              },
+            ],
+          },
+        ],
+      },
+    ]);
+
+    const target: BookmarkTree = {
+      root: {
+        path: '',
+        slug: '',
+        title: 'Public',
+        order: 0,
+        bookmarks: [
+          {
+            title: 'First',
+            url: 'https://example.org/a',
+            normalizedUrl: normalizeUrl('https://example.org/a'),
+            tags: [],
+            order: 0,
+          },
+          {
+            title: 'Second',
+            url: 'https://example.org/b',
+            normalizedUrl: normalizeUrl('https://example.org/b'),
+            tags: [],
+            order: 1,
+          },
+        ],
+        children: [
+          { path: 'tools', slug: 'tools', title: 'Tools', order: 0, bookmarks: [], children: [] },
+          { path: 'tools-2', slug: 'tools-2', title: 'Tools!', order: 1, bookmarks: [], children: [] },
+        ],
+      },
+    };
+
+    await applyTreeToBrowser('pub', target, { onStart: () => {}, onEnd: () => {} }, api);
+
+    const raw = await api.getChildren('pub');
+    expect(raw[0]?.id).toBe('sep1');
+    expect(raw.filter((c) => c.type !== 'separator').map((c) => c.id)).toEqual([
+      'bm-a',
+      'bm-b',
+      'f1',
+      'f2',
+    ]);
+
+    // Ensure colliding slug 'tools-2' targets f2 ('Tools!') instead of creating a duplicate folder
+    await ensureBrowserBookmarkInPath('pub', 'tools-2', 'CLI', 'https://example.org/cli', api);
+    expect((await api.getChildren('f2')).map((c) => c.url)).toEqual(['https://example.org/cli']);
+    expect((await api.getChildren('f1'))).toHaveLength(0);
+
+    // Rename colliding subfolder and delete bookmark via conflict-resolution helpers
+    expect(await renameBrowserSubfolder('pub', 'tools-2', 'Dev Tools', api)).toBe(true);
+    expect((await api.get('f2'))[0]?.title).toBe('Dev Tools');
+    expect(
+      await deleteBrowserBookmarkInPath('pub', 'dev-tools', 'https://example.org/cli', api),
+    ).toBe(true);
+    expect(await api.getChildren('f2')).toHaveLength(0);
   });
 });

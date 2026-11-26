@@ -1,35 +1,80 @@
 ---
-import { siteData } from '../lib/data.js';
+import {
+  getEffectiveCollaborationConfig,
+  isQuickAddUiEnabled,
+  safeJsonForScript,
+  siteData,
+  toAbsoluteUrl,
+} from '../lib/data.js';
 
 const { quickAdd } = siteData.config.pwa;
+const collab = getEffectiveCollaborationConfig();
+const repoTarget =
+  quickAdd.enabled && quickAdd.owner && quickAdd.repo ? quickAdd : collab;
+const drawerEnabled = isQuickAddUiEnabled() && Boolean(repoTarget);
+const directEnabled = quickAdd.enabled && Boolean(repoTarget);
+const allowSuggestions = collab ? collab.allowSuggestions !== false : true;
+
 const foldersPayload = [
   { path: '', title: siteData.root.title || 'Root Bookmarks' },
   ...siteData.flatFolders.map((f) => ({ path: f.path, title: `${f.title} (${f.path})` })),
 ];
-const clientConfig = JSON.stringify({
-  quickAdd,
+
+const existingIndex: Record<
+  string,
+  { title: string; folderPath: string; folderTitle: string; savedBy: string[] }
+> = {};
+for (const bm of siteData.allBookmarks) {
+  if (!existingIndex[bm.normalizedUrl]) {
+    existingIndex[bm.normalizedUrl] = {
+      title: bm.title,
+      folderPath: bm.folderPath,
+      folderTitle: bm.folderTitle,
+      savedBy: bm.globalSavedBy,
+    };
+  }
+}
+
+const shareBaseUrl = toAbsoluteUrl('');
+
+const clientConfig = safeJsonForScript({
+  repoTarget: repoTarget
+    ? {
+        forge: repoTarget.forge,
+        instanceUrl: repoTarget.instanceUrl,
+        owner: repoTarget.owner,
+        repo: repoTarget.repo,
+        branch: repoTarget.branch,
+        rootDir: repoTarget.rootDir,
+      }
+    : null,
+  directEnabled,
+  allowSuggestions,
   folders: foldersPayload,
+  existingIndex,
+  shareBaseUrl,
 });
 ---
 
-{quickAdd.enabled && (
+{drawerEnabled && repoTarget && (
   <>
     <script type="application/json" id="glyphrig-quickadd-data" set:html={clientConfig} />
     <dialog id="glyphrig-quickadd-dialog" class="glyphrig-dialog" aria-labelledby="glyphrig-quickadd-title">
       <div class="dialog-head">
-        <h2 id="glyphrig-quickadd-title" class="dialog-title">Quick Add Bookmark</h2>
+        <h2 id="glyphrig-quickadd-title" class="dialog-title">Add or Suggest Bookmark</h2>
         <button type="button" class="pill-btn" data-close-quickadd>Close</button>
       </div>
       <div class="dialog-body">
         <p class="status-note">
-          Commits directly to <code>{quickAdd.owner}/{quickAdd.repo}</code> ({quickAdd.branch}).
-          Your access token is saved strictly in this browser's <code>localStorage</code>.
+          Target repo: <code>{repoTarget.owner}/{repoTarget.repo}</code> ({repoTarget.branch}).
+          Contribute directly with a token, open a Pull Request, or suggest a link without any token.
         </p>
 
         <form id="glyphrig-quickadd-form">
           <div class="field">
             <label for="qa-url">URL</label>
             <input id="qa-url" name="url" type="url" required placeholder="https://example.com" />
+            <p id="qa-dup-notice" class="qa-dup-banner" hidden></p>
           </div>
           <div class="field">
             <label for="qa-title">Title</label>
@@ -44,37 +89,75 @@ const clientConfig = JSON.stringify({
             </select>
           </div>
           <div class="field">
-            <label for="qa-note">Note (optional)</label>
-            <input id="qa-note" name="note" type="text" placeholder="Short description or context" />
+            <label for="qa-note">Note / Why you saved it (optional)</label>
+            <input id="qa-note" name="note" type="text" placeholder="Short description or personal takeaway" />
           </div>
           <div class="field">
             <label for="qa-tags">Tags (optional, comma-separated)</label>
             <input id="qa-tags" name="tags" type="text" placeholder="web, tools" />
           </div>
-          <div class="field">
-            <label for="qa-token">Personal Access Token (scoped to repo contents)</label>
-            <input id="qa-token" name="token" type="password" required placeholder="ghp_... / glpat-..." />
-          </div>
+
+          {quickAdd.enabled && (
+            <>
+              <div class="field">
+                <label for="qa-token">Access Token (optional — saved only in browser localStorage)</label>
+                <input id="qa-token" name="token" type="password" placeholder="ghp_... / glpat-... (leave blank to suggest via issue)" />
+              </div>
+              <label class="qa-checkbox">
+                <input type="checkbox" id="qa-propose-pr" />
+                <span>Open a Pull Request instead of committing directly to <code>{repoTarget.branch}</code></span>
+              </label>
+            </>
+          )}
 
           <p id="qa-status" class="status-note" aria-live="polite"></p>
 
-          <button type="submit" id="qa-submit" class="pill-btn pill-btn-primary">
-            Commit Bookmark
-          </button>
+          <div class="qa-actions">
+            {directEnabled && (
+              <button type="submit" id="qa-submit" class="pill-btn pill-btn-primary">
+                Commit / Propose Bookmark
+              </button>
+            )}
+            {allowSuggestions && (
+              <button type="button" id="qa-suggest-btn" class="pill-btn">
+                Suggest via {repoTarget.forge === 'gitlab' ? 'GitLab' : repoTarget.forge === 'forgejo' ? 'Forgejo' : 'GitHub'} Issue (No Token)
+              </button>
+            )}
+          </div>
         </form>
+
+        <details class="qa-tools">
+          <summary>Mobile &amp; Browser Capture Tools (Bookmarklet &amp; iOS Shortcut)</summary>
+          <div class="qa-tools-body">
+            <p class="status-note">
+              Drag or copy this bookmarklet into Safari / mobile browsers to send the active tab straight into Quick Add:
+            </p>
+            <div class="join-copy-row">
+              <input id="qa-bookmarklet" type="text" readonly />
+              <button type="button" id="qa-copy-bookmarklet" class="pill-btn">Copy</button>
+            </div>
+            <p class="status-note">
+              <strong>iOS Shortcut URL:</strong>{' '}
+              <code id="qa-shortcut-url"></code>
+            </p>
+          </div>
+        </details>
       </div>
     </dialog>
 
     <script>
       import {
+        buildSuggestBookmarkUrl,
         createForgeAdapter,
         folderPathToFilePath,
         inspectUrlSafety,
         mergeBookmarkEntries,
+        mergeContributorNotes,
         normalizeUrl,
         parseFolderMarkdown,
         serializeFolderMarkdown,
         type FolderNode,
+        type ForgeKind,
       } from '@glyphrig/core';
 
       const PAT_STORAGE_KEY = 'glyphrig-quickadd-pat';
@@ -82,35 +165,113 @@ const clientConfig = JSON.stringify({
       const dialog = document.getElementById('glyphrig-quickadd-dialog') as HTMLDialogElement | null;
       const form = document.getElementById('glyphrig-quickadd-form') as HTMLFormElement | null;
       const statusEl = document.getElementById('qa-status');
+      const dupEl = document.getElementById('qa-dup-notice');
       const urlInput = document.getElementById('qa-url') as HTMLInputElement | null;
       const titleInput = document.getElementById('qa-title') as HTMLInputElement | null;
       const folderSelect = document.getElementById('qa-folder') as HTMLSelectElement | null;
       const noteInput = document.getElementById('qa-note') as HTMLInputElement | null;
       const tagsInput = document.getElementById('qa-tags') as HTMLInputElement | null;
       const tokenInput = document.getElementById('qa-token') as HTMLInputElement | null;
+      const proposePrCheck = document.getElementById('qa-propose-pr') as HTMLInputElement | null;
       const submitBtn = document.getElementById('qa-submit') as HTMLButtonElement | null;
+      const suggestBtn = document.getElementById('qa-suggest-btn') as HTMLButtonElement | null;
+      const bookmarkletInput = document.getElementById('qa-bookmarklet') as HTMLInputElement | null;
+      const copyBookmarkletBtn = document.getElementById('qa-copy-bookmarklet');
+      const shortcutUrlEl = document.getElementById('qa-shortcut-url');
 
       interface QuickAddPayload {
-        quickAdd: {
-          enabled: boolean;
-          forge: 'github' | 'gitlab' | 'forgejo';
+        repoTarget: {
+          forge: ForgeKind;
           instanceUrl?: string;
           owner: string;
           repo: string;
           branch: string;
           rootDir: string;
-        };
+        } | null;
+        directEnabled: boolean;
+        allowSuggestions: boolean;
+        existingIndex: Record<
+          string,
+          { title: string; folderPath: string; folderTitle: string; savedBy: string[] }
+        >;
+        shareBaseUrl: string;
       }
 
       const payload: QuickAddPayload | null = dataEl?.textContent
         ? (JSON.parse(dataEl.textContent) as QuickAddPayload)
         : null;
 
+      function isSafeExternalUrl(raw?: string): boolean {
+        if (!raw) return false;
+        try {
+          const parsed = new URL(raw);
+          return parsed.protocol === 'https:' || parsed.protocol === 'http:';
+        } catch {
+          return false;
+        }
+      }
+
+      function resolveAbsoluteSiteUrl(): string {
+        if (payload?.shareBaseUrl && /^https?:\/\//i.test(payload.shareBaseUrl)) {
+          return payload.shareBaseUrl;
+        }
+        return new URL(payload?.shareBaseUrl || './', window.location.href).toString();
+      }
+
+      if (bookmarkletInput && shortcutUrlEl) {
+        const absBase = resolveAbsoluteSiteUrl();
+        const bookmarklet = `javascript:(()=>{window.open(${JSON.stringify(absBase)}+'?url='+encodeURIComponent(location.href)+'&title='+encodeURIComponent(document.title),'_blank');})();`;
+        bookmarkletInput.value = bookmarklet;
+        shortcutUrlEl.textContent = `${absBase}?url=[URL]&title=[Title]`;
+      }
+
+      copyBookmarkletBtn?.addEventListener('click', async () => {
+        if (!bookmarkletInput) return;
+        await navigator.clipboard.writeText(bookmarkletInput.value).catch(() => {
+          bookmarkletInput.select();
+          document.execCommand('copy');
+        });
+        if (statusEl) statusEl.textContent = 'Copied bookmarklet to clipboard.';
+      });
+
+      function checkDuplicate(): void {
+        if (!dupEl || !urlInput || !payload) return;
+        const raw = urlInput.value.trim();
+        if (!raw) {
+          dupEl.hidden = true;
+          return;
+        }
+        try {
+          const norm = normalizeUrl(raw, true);
+          const match = payload.existingIndex[norm];
+          if (match) {
+            const who =
+              match.savedBy.length > 0
+                ? ` by ${match.savedBy.map((u) => `@${u}`).join(', ')}`
+                : '';
+            const selectedFolder = folderSelect?.value ?? '';
+            const sameFolder = selectedFolder === match.folderPath;
+            dupEl.textContent = sameFolder
+              ? `Already in ${match.folderTitle}${who}: "${match.title}". Submitting will merge your attribution & note.`
+              : `Already saved in ${match.folderTitle}${who}: "${match.title}". Select "${match.folderTitle}" above to merge instead of duplicating.`;
+            dupEl.hidden = false;
+            return;
+          }
+        } catch {
+          // ignore partial URLs
+        }
+        dupEl.hidden = true;
+      }
+
+      urlInput?.addEventListener('input', checkDuplicate);
+      folderSelect?.addEventListener('change', checkDuplicate);
+
       function openQuickAdd(): void {
         if (!dialog) return;
         if (tokenInput && !tokenInput.value) {
           tokenInput.value = localStorage.getItem(PAT_STORAGE_KEY) || '';
         }
+        checkDuplicate();
         if (!dialog.open) dialog.showModal();
       }
 
@@ -124,7 +285,7 @@ const clientConfig = JSON.stringify({
         if (e.target === dialog) dialog.close();
       });
 
-      // Handle Web Share Target parameters on mobile
+      // Handle Web Share Target / Bookmarklet query parameters
       const params = new URLSearchParams(window.location.search);
       const sharedUrlParam = params.get('url') || '';
       const sharedTextParam = params.get('text') || '';
@@ -145,9 +306,38 @@ const clientConfig = JSON.stringify({
         window.history.replaceState({}, '', window.location.pathname);
       }
 
+      suggestBtn?.addEventListener('click', () => {
+        if (!payload?.repoTarget || !statusEl) return;
+        const rawUrl = urlInput?.value.trim() || '';
+        const title = titleInput?.value.trim() || rawUrl;
+        if (!rawUrl) {
+          statusEl.className = 'status-error';
+          statusEl.textContent = 'Enter a URL first to suggest a bookmark.';
+          return;
+        }
+        const safety = inspectUrlSafety(rawUrl);
+        if (!safety.allowed) {
+          statusEl.className = 'status-error';
+          statusEl.textContent = `Blocked unsafe URL: ${safety.detail || safety.reason}`;
+          return;
+        }
+        const tags = (tagsInput?.value || '')
+          .split(',')
+          .map((t) => t.trim().replace(/^#/, '').toLowerCase())
+          .filter(Boolean);
+        const issueUrl = buildSuggestBookmarkUrl(payload.repoTarget, {
+          title,
+          url: safety.cleanedUrl,
+          folderPath: folderSelect?.value ?? '',
+          note: noteInput?.value.trim() || undefined,
+          tags,
+        });
+        window.open(issueUrl, '_blank', 'noopener,noreferrer');
+      });
+
       form?.addEventListener('submit', async (e) => {
         e.preventDefault();
-        if (!payload || !statusEl || !submitBtn) return;
+        if (!payload?.repoTarget || !statusEl) return;
 
         const rawUrl = urlInput?.value.trim() || '';
         const title = titleInput?.value.trim() || rawUrl;
@@ -166,19 +356,25 @@ const clientConfig = JSON.stringify({
           return;
         }
 
-        if (!token) {
-          statusEl.className = 'status-error';
-          statusEl.textContent = 'Please provide a Personal Access Token.';
+        if (!token || !submitBtn) {
+          if (suggestBtn) {
+            suggestBtn.click();
+          } else {
+            statusEl.className = 'status-error';
+            statusEl.textContent = 'Please provide an Access Token to commit.';
+          }
           return;
         }
 
         localStorage.setItem(PAT_STORAGE_KEY, token);
         submitBtn.disabled = true;
         statusEl.className = 'status-note';
-        statusEl.textContent = 'Reading repository and committing bookmark…';
+        statusEl.textContent = proposePrCheck?.checked
+          ? 'Preparing Pull Request proposal…'
+          : 'Reading repository and committing bookmark…';
 
         try {
-          const cfg = payload.quickAdd;
+          const cfg = payload.repoTarget;
           const adapter = createForgeAdapter({
             forge: cfg.forge,
             instanceUrl: cfg.instanceUrl,
@@ -210,7 +406,10 @@ const clientConfig = JSON.stringify({
             url: safety.cleanedUrl,
             normalizedUrl: normUrl,
             added: today,
-            ...(note ? { note } : {}),
+            ...(note && !user?.username ? { note } : {}),
+            ...(note && user?.username
+              ? { contributorNotes: mergeContributorNotes(undefined, { [user.username]: note }) }
+              : {}),
             tags,
             ...(user?.username ? { savedBy: [user.username] } : {}),
             order: existingBookmarks.length,
@@ -235,29 +434,61 @@ const clientConfig = JSON.stringify({
             title: folderTitle,
             order: parsedDoc?.order ?? 0,
             ...(parsedDoc?.description ? { description: parsedDoc.description } : {}),
+            ...(parsedDoc?.maintainers ? { maintainers: parsedDoc.maintainers } : {}),
             ...(parsedDoc?.introMarkdown ? { introMarkdown: parsedDoc.introMarkdown } : {}),
             bookmarks: nextBookmarks,
             children: [],
           };
 
           const updatedMd = serializeFolderMarkdown(folderNode, parsedDoc);
-          const commit = await adapter.commitChanges({
-            branch: cfg.branch,
-            parentSha: remote.commitSha,
-            message: `chore(bookmarks): quick-add ${title}`,
-            upserts: new Map([[filePath, updatedMd]]),
-            deletes: [],
-            existingPaths: new Set(remote.files.keys()),
-            existingFileShas: remote.fileShas,
-          });
 
-          statusEl.className = 'status-ok';
-          statusEl.textContent = `Committed (${commit.commitSha.slice(0, 7)})! CI will publish shortly.`;
+          if (proposePrCheck?.checked && adapter.proposeChanges) {
+            const branchName = `glyphrig/${user?.username || 'contributions'}`;
+            const proposed = await adapter.proposeChanges({
+              baseBranch: cfg.branch,
+              proposalBranch: branchName,
+              parentSha: remote.commitSha,
+              message: `chore(bookmarks): propose ${title}`,
+              prTitle: `chore(bookmarks): add "${title}"`,
+              prBody: `Proposed bookmark via Glyphrig Web Quick Add:\n\n- [${title}](${safety.cleanedUrl}) in \`${folderPath || 'root'}\``,
+              upserts: new Map([[filePath, updatedMd]]),
+              deletes: [],
+              existingPaths: new Set(remote.files.keys()),
+              existingFileShas: remote.fileShas,
+            });
+            statusEl.className = 'status-ok';
+            statusEl.textContent = '';
+            if (isSafeExternalUrl(proposed.prUrl)) {
+              statusEl.append(document.createTextNode('Opened Pull Request: '));
+              const prA = document.createElement('a');
+              prA.href = proposed.prUrl;
+              prA.target = '_blank';
+              prA.rel = 'noopener noreferrer';
+              prA.textContent = `#${proposed.prNumber ?? 'PR'}`;
+              statusEl.append(prA);
+            } else {
+              statusEl.textContent = `Proposed on branch ${proposed.proposalBranch}!`;
+            }
+          } else {
+            const commit = await adapter.commitChanges({
+              branch: cfg.branch,
+              parentSha: remote.commitSha,
+              message: `chore(bookmarks): quick-add ${title}`,
+              upserts: new Map([[filePath, updatedMd]]),
+              deletes: [],
+              existingPaths: new Set(remote.files.keys()),
+              existingFileShas: remote.fileShas,
+            });
+            statusEl.className = 'status-ok';
+            statusEl.textContent = `Committed (${commit.commitSha.slice(0, 7)})! CI will publish shortly.`;
+          }
+
           form.reset();
           if (tokenInput) tokenInput.value = token;
+          checkDuplicate();
         } catch (err) {
           statusEl.className = 'status-error';
-          statusEl.textContent = err instanceof Error ? err.message : 'Failed to commit bookmark.';
+          statusEl.textContent = err instanceof Error ? err.message : 'Failed to save bookmark.';
         } finally {
           submitBtn.disabled = false;
         }

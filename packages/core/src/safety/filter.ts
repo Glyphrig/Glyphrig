@@ -137,11 +137,26 @@ export function isPrivateOrLocalHostname(hostname: string): boolean {
   if (isPrivateIpv6(host)) {
     return true;
   }
+  // Public IPv6 literal (already checked by isPrivateIpv6 above)
+  if (host.includes(':')) {
+    return false;
+  }
   // Single-label hostnames (no dot) like http://intranet/ or http://nas:8080
   if (!host.includes('.')) {
     return true;
   }
   return false;
+}
+
+export function isSafeHttpUrl(rawUrl?: string): boolean {
+  if (!rawUrl) return false;
+  try {
+    const parsed = new URL(rawUrl.trim());
+    const proto = parsed.protocol.toLowerCase();
+    return proto === 'http:' || proto === 'https:';
+  } catch {
+    return false;
+  }
 }
 
 export interface UrlSafetyResult {
@@ -220,6 +235,22 @@ export function inspectUrlSafety(
           normalizedUrl: rawUrl,
           wasCleaned: false,
         };
+      }
+    }
+    if (parsed.hash && parsed.hash.includes('=')) {
+      const hashBody = parsed.hash.replace(/^#/, '');
+      const hashParams = new URLSearchParams(hashBody);
+      for (const key of hashParams.keys()) {
+        if (SENSITIVE_QUERY_KEYS.has(key.toLowerCase())) {
+          return {
+            allowed: false,
+            reason: 'sensitive-query-param',
+            detail: `URL fragment contains sensitive parameter "${key}"`,
+            cleanedUrl: rawUrl,
+            normalizedUrl: rawUrl,
+            wasCleaned: false,
+          };
+        }
       }
     }
   }

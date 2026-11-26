@@ -42,6 +42,27 @@ export interface CommitChangesInput {
   existingFileShas?: Map<string, string>;
 }
 
+export interface ProposeChangesInput {
+  baseBranch: string;
+  proposalBranch: string;
+  parentSha: string | null;
+  message: string;
+  prTitle: string;
+  prBody: string;
+  upserts: Map<string, string>;
+  deletes: string[];
+  existingPaths?: Set<string>;
+  existingFileShas?: Map<string, string>;
+}
+
+export interface ProposeChangesResult {
+  commitSha: string;
+  proposalBranch: string;
+  prUrl: string;
+  prNumber?: number;
+  updatedExisting: boolean;
+}
+
 export interface AuthenticatedUser {
   username: string;
   displayName?: string;
@@ -55,6 +76,7 @@ export interface ForgeAdapter {
   getHeadSha(branch: string): Promise<string | null>;
   readBookmarkFiles(branch: string, rootDir: string): Promise<ReadBookmarkFilesResult>;
   commitChanges(input: CommitChangesInput): Promise<{ commitSha: string }>;
+  proposeChanges?(input: ProposeChangesInput): Promise<ProposeChangesResult>;
 }
 
 export interface ForgeAdapterConfig {

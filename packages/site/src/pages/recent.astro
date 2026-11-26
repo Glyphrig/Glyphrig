@@ -6,11 +6,12 @@ import { collectTagsInBookmarks, siteData, sortRecentBookmarks } from '../lib/da
 
 const sorted = sortRecentBookmarks(siteData.allBookmarks);
 const tags = collectTagsInBookmarks(sorted);
+const contributors = siteData.contributors.slice(0, 12);
 ---
 
 <BaseLayout
   title="Recently Added"
-  description="Chronological bookmark timeline"
+  description="Chronological team activity timeline"
   activeNav="recent"
   indexForSearch={false}
 >
@@ -19,7 +20,21 @@ const tags = collectTagsInBookmarks(sorted);
     <p class="page-subtitle">
       {sorted.length} bookmark{sorted.length === 1 ? '' : 's'} ordered newest first.
     </p>
+    <p id="recent-new-banner" class="recent-new-banner" hidden></p>
   </header>
+
+  {contributors.length > 0 && (
+    <div class="contributor-filter-bar" aria-label="Filter by contributor">
+      <button type="button" class="pill-btn is-active" data-contrib-filter="">
+        Everyone
+      </button>
+      {contributors.map((c) => (
+        <button type="button" class="pill-btn" data-contrib-filter={c.username}>
+          @{c.username} ({c.count})
+        </button>
+      ))}
+    </div>
+  )}
 
   <ViewControls tags={tags} />
 
@@ -36,4 +51,48 @@ const tags = collectTagsInBookmarks(sorted);
   ) : (
     <div class="empty-state">No bookmarks yet.</div>
   )}
+
+  <script>
+    const VISIT_KEY = 'glyphrig-recent-last-visit';
+    const banner = document.getElementById('recent-new-banner');
+    const items = [...document.querySelectorAll<HTMLElement>('[data-bookmark-item]')];
+    const lastVisit = localStorage.getItem(VISIT_KEY);
+    const today = new Date().toISOString().slice(0, 10);
+
+    if (lastVisit && items.length > 0) {
+      let newCount = 0;
+      for (const el of items) {
+        const added = el.dataset.added || '';
+        if (added && added > lastVisit) {
+          el.classList.add('is-new-since-visit');
+          const meta = el.querySelector('.bm-meta');
+          if (meta && !meta.querySelector('.bm-new-badge')) {
+            const badge = document.createElement('span');
+            badge.className = 'bm-new-badge';
+            badge.textContent = 'New';
+            meta.prepend(badge);
+          }
+          newCount++;
+        }
+      }
+      if (newCount > 0 && banner) {
+        banner.textContent = `${newCount} new link${newCount === 1 ? '' : 's'} since your last visit (${lastVisit}).`;
+        banner.hidden = false;
+      }
+    }
+    localStorage.setItem(VISIT_KEY, today);
+
+    const collectionEl = document.querySelector<HTMLElement>('[data-bookmark-collection]');
+    const contribButtons = [
+      ...document.querySelectorAll<HTMLButtonElement>('[data-contrib-filter]'),
+    ];
+    contribButtons.forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const selected = btn.dataset.contribFilter || '';
+        contribButtons.forEach((b) => b.classList.toggle('is-active', b === btn));
+        if (collectionEl) collectionEl.dataset.activeContrib = selected;
+        window.dispatchEvent(new CustomEvent('glyphrig:apply-filters'));
+      });
+    });
+  </script>
 </BaseLayout>

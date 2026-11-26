@@ -1,5 +1,6 @@
 import {
   assignSiblingSlugs,
+  isSafeHttpUrl,
   normalizeUrl,
   slugifyFolderName,
   type BookmarkEntry,
@@ -236,6 +237,9 @@ export async function applyTreeToBrowser(
       const orderedTargetItems: Array<{ id: string; isFolder: boolean }> = [];
 
       for (const targetBm of desiredBookmarks) {
+        if (!isSafeHttpUrl(targetBm.url)) {
+          continue;
+        }
         const norm = normalizeUrl(targetBm.url, false);
         const candidates = bmByNormUrl.get(norm);
         const matched =
@@ -244,20 +248,28 @@ export async function applyTreeToBrowser(
         if (matched) {
           keptBookmarkIds.add(matched.id);
           if (matched.title !== targetBm.title || matched.url !== targetBm.url) {
-            await api.update(matched.id, {
-              title: targetBm.title,
-              url: targetBm.url,
-            });
+            try {
+              await api.update(matched.id, {
+                title: targetBm.title,
+                url: targetBm.url,
+              });
+            } catch {
+              // Ignore single malformed URL rejected by browser API
+            }
           }
           orderedTargetItems.push({ id: matched.id, isFolder: false });
         } else {
-          const created = await api.create({
-            parentId: browserFolderId,
-            title: targetBm.title,
-            url: targetBm.url,
-          });
-          keptBookmarkIds.add(created.id);
-          orderedTargetItems.push({ id: created.id, isFolder: false });
+          try {
+            const created = await api.create({
+              parentId: browserFolderId,
+              title: targetBm.title,
+              url: targetBm.url,
+            });
+            keptBookmarkIds.add(created.id);
+            orderedTargetItems.push({ id: created.id, isFolder: false });
+          } catch {
+            // Isolate browser-rejected bookmark URLs so reconciliation continues
+          }
         }
       }
 
@@ -306,15 +318,27 @@ export async function applyTreeToBrowser(
         }
       }
 
-      // Ensure stable order matching targetTree
+      // Ensure stable order matching targetTree while preserving Firefox separator positions
       for (let i = 0; i < orderedTargetItems.length; i++) {
         const item = orderedTargetItems[i]!;
-        const currentChildren = (await api.getChildren(browserFolderId)).filter(
-          (c) => c.type !== 'separator',
-        );
-        const currentIdx = currentChildren.findIndex((c) => c.id === item.id);
-        if (currentIdx !== -1 && currentIdx !== i) {
-          await api.move(item.id, { parentId: browserFolderId, index: i });
+        const rawChildren = await api.getChildren(browserFolderId);
+        const nonSepRawIndices: number[] = [];
+        let currentRawIdx = -1;
+        for (let r = 0; r < rawChildren.length; r++) {
+          const child = rawChildren[r]!;
+          if (child.type === 'separator') continue;
+          nonSepRawIndices.push(r);
+          if (child.id === item.id) {
+            currentRawIdx = r;
+          }
+        }
+        const targetRawIdx = nonSepRawIndices[i];
+        if (
+          currentRawIdx !== -1 &&
+          targetRawIdx !== undefined &&
+          currentRawIdx !== targetRawIdx
+        ) {
+          await api.move(item.id, { parentId: browserFolderId, index: targetRawIdx });
         }
       }
 
@@ -327,4 +351,130 @@ export async function applyTreeToBrowser(
   } finally {
     await hooks.onEnd();
   }
+}
+
+async function resolveBrowserFolderByPath(
+  rootFolderId: string,
+  folderPath: string,
+  createIfMissing: boolean,
+  api: BookmarksApi,
+): Promise<string | null> {
+  let parentId = rootFolderId;
+  const segments = folderPath
+    .split('/')
+    .map((s) => s.trim())
+    .filter(Boolean);
+
+  for (const seg of segments) {
+    const children = await api.getChildren(parentId);
+    const childFolders = children.filter(
+      (c) => c.url === undefined && c.type !== 'separator',
+    );
+    const childSlugs = assignSiblingSlugs(
+      childFolders.map((c) => c.title || 'Folder'),
+    );
+    let matchIdx = childSlugs.indexOf(seg);
+    if (matchIdx === -1) {
+      const normalizedSeg = slugifyFolderName(seg);
+      matchIdx = childSlugs.indexOf(normalizedSeg);
+    }
+    if (matchIdx >= 0) {
+      parentId = childFolders[matchIdx]!.id;
+    } else if (createIfMissing) {
+      const displayTitle = seg
+        .split('-')
+        .filter(Boolean)
+        .map((p) => p.charAt(0).toUpperCase() + p.slice(1))
+        .join(' ');
+      const createdFolder = await api.create({
+        parentId,
+        title: displayTitle || seg,
+      });
+      parentId = createdFolder.id;
+    } else {
+      return null;
+    }
+  }
+  return parentId;
+}
+
+export async function ensureBrowserBookmarkInPath(
+  rootFolderId: string,
+  folderPath: string,
+  title: string,
+  url: string,
+  api: BookmarksApi = defaultApi(),
+): Promise<{ bookmarkId: string; created: boolean }> {
+  const parentId = await resolveBrowserFolderByPath(
+    rootFolderId,
+    folderPath,
+    true,
+    api,
+  );
+  if (!parentId) {
+    throw new Error(`Could not resolve bookmark folder path "${folderPath}".`);
+  }
+
+  const targetNorm = normalizeUrl(url, false);
+  const siblings = await api.getChildren(parentId);
+  const existing = siblings.find(
+    (c) => c.url !== undefined && normalizeUrl(c.url, false) === targetNorm,
+  );
+  if (existing) {
+    if (title.trim() && existing.title !== title.trim()) {
+      await api.update(existing.id, { title: title.trim() });
+    }
+    return { bookmarkId: existing.id, created: false };
+  }
+
+  const created = await api.create({
+    parentId,
+    title: title.trim() || url,
+    url,
+  });
+  return { bookmarkId: created.id, created: true };
+}
+
+export async function deleteBrowserBookmarkInPath(
+  rootFolderId: string,
+  folderPath: string,
+  url: string,
+  api: BookmarksApi = defaultApi(),
+): Promise<boolean> {
+  const parentId = await resolveBrowserFolderByPath(
+    rootFolderId,
+    folderPath,
+    false,
+    api,
+  );
+  if (!parentId) return false;
+  const targetNorm = normalizeUrl(url, false);
+  const siblings = await api.getChildren(parentId);
+  let removed = false;
+  for (const child of siblings) {
+    if (child.url !== undefined && normalizeUrl(child.url, false) === targetNorm) {
+      await api.remove(child.id);
+      removed = true;
+    }
+  }
+  return removed;
+}
+
+export async function renameBrowserSubfolder(
+  rootFolderId: string,
+  folderPath: string,
+  newTitle: string,
+  api: BookmarksApi = defaultApi(),
+): Promise<boolean> {
+  const trimmed = newTitle.trim();
+  if (!trimmed) return false;
+  const folderId = await resolveBrowserFolderByPath(
+    rootFolderId,
+    folderPath,
+    false,
+    api,
+  );
+  if (!folderId) return false;
+  await api.update(folderId, { title: trimmed });
+  return true;
 }

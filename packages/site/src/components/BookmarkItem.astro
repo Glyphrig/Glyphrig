@@ -1,6 +1,13 @@
 ---
 import type { EnrichedBookmark } from '../types.js';
-import { contributorHref, folderHref, siteData, tagHref, withBase } from '../lib/data.js';
+import {
+  contributorHref,
+  folderHref,
+  isSafeHttpUrl,
+  siteData,
+  tagHref,
+  withBase,
+} from '../lib/data.js';
 
 interface Props {
   bookmark: EnrichedBookmark;
@@ -11,17 +18,26 @@ const { bookmark, showFolder = false } = Astro.props;
 const tagSlugMap = new Map(siteData.tags.map((t) => [t.tag, t.slug]));
 const contributorSlugMap = new Map(siteData.contributors.map((c) => [c.username, c.slug]));
 const monogram = (bookmark.domain || '?').replace(/^www\./, '').charAt(0).toUpperCase() || '?';
+const contributorNoteEntries = bookmark.contributorNotes
+  ? Object.entries(bookmark.contributorNotes).sort((a, b) => a[0].localeCompare(b[0]))
+  : [];
+const safeHref = isSafeHttpUrl(bookmark.url) ? bookmark.url : undefined;
+const safeOgImage = isSafeHttpUrl(bookmark.ogImage) ? bookmark.ogImage : undefined;
+const safeWaybackUrl = isSafeHttpUrl(bookmark.waybackUrl) ? bookmark.waybackUrl : undefined;
 ---
 
 <article
   class="bookmark-item"
   data-tags={bookmark.tags.join(',')}
+  data-contributors={bookmark.globalSavedBy.join(',')}
+  data-added={bookmark.added ?? ''}
+  data-url={bookmark.normalizedUrl}
   data-bookmark-item
 >
-  <div class:list={['bm-og-wrap', { 'is-empty': !bookmark.ogImage }]}>
-    {bookmark.ogImage ? (
+  <div class:list={['bm-og-wrap', { 'is-empty': !safeOgImage }]}>
+    {safeOgImage ? (
       <img
-        src={bookmark.ogImage}
+        src={safeOgImage}
         alt=""
         class="bm-og-img"
         loading="lazy"
@@ -48,21 +64,46 @@ const monogram = (bookmark.domain || '?').replace(/^www\./, '').charAt(0).toUppe
         ) : (
           <span class="bm-monogram" aria-hidden="true">{monogram}</span>
         )}
-        <a
-          href={bookmark.url}
-          class="bm-link"
-          target="_blank"
-          rel="noopener noreferrer"
-          data-bm-anchor
-        >
-          {bookmark.title}
-        </a>
+        {safeHref ? (
+          <a
+            href={safeHref}
+            class="bm-link"
+            target="_blank"
+            rel="noopener noreferrer"
+            data-bm-anchor
+          >
+            {bookmark.title}
+          </a>
+        ) : (
+          <span class="bm-link">{bookmark.title}</span>
+        )}
       </div>
       <span class="bm-domain">{bookmark.domain}</span>
     </div>
 
     {bookmark.effectiveDescription && (
       <p class="bm-desc">{bookmark.effectiveDescription}</p>
+    )}
+
+    {contributorNoteEntries.length > 0 && (
+      <ul class="bm-contributor-notes" aria-label="Contributor notes">
+        {contributorNoteEntries.map(([username, text]) => {
+          const slug = contributorSlugMap.get(username);
+          return (
+            <li class="bm-contributor-note">
+              {slug ? (
+                <a href={contributorHref(slug)} class="bm-note-author">
+                  @{username}
+                </a>
+              ) : (
+                <span class="bm-note-author">@{username}</span>
+              )}
+              <span class="bm-note-sep">:</span>{' '}
+              <span>{text}</span>
+            </li>
+          );
+        })}
+      </ul>
     )}
 
     <div class="bm-meta">
@@ -88,13 +129,33 @@ const monogram = (bookmark.domain || '?').replace(/^www\./, '').charAt(0).toUppe
         );
       })}
       {bookmark.globalSavedBy.map((username) => {
-        const slug = contributorSlugMap.get(username) ?? encodeURIComponent(username);
-        return (
+        const slug = contributorSlugMap.get(username);
+        return slug ? (
           <a href={contributorHref(slug)} class="bm-contributor">
             @{username}
           </a>
+        ) : (
+          <span class="bm-contributor">@{username}</span>
         );
       })}
+      {bookmark.linkStatus === 'dead' && (
+        <span
+          class="bm-dead-badge"
+          title={bookmark.httpStatus ? `HTTP ${bookmark.httpStatus}` : 'URL could not be reached'}
+        >
+          Link offline
+        </span>
+      )}
+      {safeWaybackUrl && (
+        <a
+          href={safeWaybackUrl}
+          class="bm-archive-link"
+          target="_blank"
+          rel="noopener noreferrer"
+        >
+          Archived snapshot
+        </a>
+      )}
       {bookmark.added && <span class="bm-date">{bookmark.added}</span>}
     </div>
   </div>

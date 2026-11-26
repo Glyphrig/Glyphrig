@@ -12,6 +12,8 @@ import {
   type CommitChangesInput,
   type ForgeAdapter,
   type ForgeAdapterConfig,
+  type ProposeChangesInput,
+  type ProposeChangesResult,
   type ReadBookmarkFilesResult,
   type RepoConnectionInfo,
 } from './types.js';
@@ -48,7 +50,7 @@ export class ForgejoAdapter implements ForgeAdapter {
         ...init,
         headers: {
           Accept: 'application/json',
-          Authorization: `token ${this.token}`,
+          ...(this.token ? { Authorization: `token ${this.token}` } : {}),
           ...(init.body ? { 'Content-Type': 'application/json' } : {}),
           ...init.headers,
         },
@@ -135,7 +137,7 @@ export class ForgejoAdapter implements ForgeAdapter {
 
   async getHeadSha(branch: string): Promise<string | null> {
     const res = await this.request(
-      `/repos/${encodeURIComponent(this.owner)}/${encodeURIComponent(this.repo)}/branches/${encodeURIComponent(branch)}`,
+      `/repos/${encodeURIComponent(this.owner)}/${encodeURIComponent(this.repo)}/branches/${encodeRefPath(branch)}`,
       {},
       [404],
     );
@@ -156,20 +158,31 @@ export class ForgejoAdapter implements ForgeAdapter {
       return { commitSha: null, files: new Map(), fileShas: new Map() };
     }
 
-    const res = await this.request(
-      `/repos/${encodeURIComponent(this.owner)}/${encodeURIComponent(this.repo)}/git/trees/${encodeURIComponent(commitSha)}?recursive=1`,
-      {},
-      [404, 409],
-    );
-    if (res.status === 404 || res.status === 409) {
-      return { commitSha, files: new Map(), fileShas: new Map() };
+    const allEntries: Array<{ path: string; type: string; sha: string }> = [];
+    let page = 1;
+    while (page <= 50) {
+      const res = await this.request(
+        `/repos/${encodeURIComponent(this.owner)}/${encodeURIComponent(this.repo)}/git/trees/${encodeURIComponent(commitSha)}?recursive=1&per_page=1000&page=${page}`,
+        {},
+        [404, 409],
+      );
+      if (res.status === 404 || res.status === 409) {
+        break;
+      }
+
+      const treeData = (await res.json()) as {
+        tree?: Array<{ path: string; type: string; sha: string }>;
+        truncated?: boolean;
+      };
+      const batch = treeData.tree ?? [];
+      allEntries.push(...batch);
+      if (!treeData.truncated || batch.length === 0) {
+        break;
+      }
+      page++;
     }
 
-    const treeData = (await res.json()) as {
-      tree?: Array<{ path: string; type: string; sha: string }>;
-    };
-
-    const matchingBlobs = (treeData.tree ?? []).filter(
+    const matchingBlobs = allEntries.filter(
       (item) =>
         item.type === 'blob' && isBookmarkOrArchiveFilePath(cleanRoot, item.path),
     );
@@ -310,5 +323,95 @@ export class ForgejoAdapter implements ForgeAdapter {
     }
 
     return { commitSha: latestSha };
+  }
+
+  async proposeChanges(input: ProposeChangesInput): Promise<ProposeChangesResult> {
+    if (!this.token) {
+      throw new ForgeError(
+        'Authentication is required to propose bookmark changes via Pull Request.',
+        401,
+        'auth',
+      );
+    }
+
+    const repoPrefix = `/repos/${encodeURIComponent(this.owner)}/${encodeURIComponent(this.repo)}`;
+    let existingBranchSha = await this.getHeadSha(input.proposalBranch);
+    if (!existingBranchSha) {
+      await this.request(`${repoPrefix}/branches`, {
+        method: 'POST',
+        body: JSON.stringify({
+          new_branch_name: input.proposalBranch,
+          old_ref_name: input.parentSha || input.baseBranch,
+        }),
+      });
+      existingBranchSha = await this.getHeadSha(input.proposalBranch);
+    }
+
+    const committed = await this.commitChanges({
+      branch: input.proposalBranch,
+      parentSha: existingBranchSha ?? input.parentSha,
+      message: input.message,
+      upserts: input.upserts,
+      deletes: input.deletes,
+      existingFileShas: undefined,
+    });
+
+    let existing:
+      | { number: number; html_url: string; head?: { ref?: string }; base?: { ref?: string } }
+      | undefined;
+    for (let prPage = 1; prPage <= 10; prPage++) {
+      const prsRes = await this.request(
+        `${repoPrefix}/pulls?state=open&limit=50&page=${prPage}`,
+        {},
+        [404],
+      );
+      if (prsRes.status === 404) break;
+      const openPrs = (await prsRes.json()) as Array<{
+        number: number;
+        html_url: string;
+        head?: { ref?: string };
+        base?: { ref?: string };
+      }>;
+      existing = openPrs.find(
+        (pr) => pr.head?.ref === input.proposalBranch && pr.base?.ref === input.baseBranch,
+      );
+      if (existing || openPrs.length < 50) break;
+    }
+
+    if (existing) {
+      const patchRes = await this.request(`${repoPrefix}/pulls/${existing.number}`, {
+        method: 'PATCH',
+        body: JSON.stringify({
+          title: input.prTitle,
+          body: input.prBody,
+        }),
+      });
+      const updated = (await patchRes.json()) as { number: number; html_url: string };
+      return {
+        commitSha: committed.commitSha,
+        proposalBranch: input.proposalBranch,
+        prUrl: updated.html_url || existing.html_url,
+        prNumber: updated.number || existing.number,
+        updatedExisting: true,
+      };
+    }
+
+    const createRes = await this.request(`${repoPrefix}/pulls`, {
+      method: 'POST',
+      body: JSON.stringify({
+        title: input.prTitle,
+        body: input.prBody,
+        head: input.proposalBranch,
+        base: input.baseBranch,
+      }),
+    });
+    const created = (await createRes.json()) as { number: number; html_url: string };
+    return {
+      commitSha: committed.commitSha,
+      proposalBranch: input.proposalBranch,
+      prUrl: created.html_url,
+      prNumber: created.number,
+      updatedExisting: false,
+    };
   }
 }

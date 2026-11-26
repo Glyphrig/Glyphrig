@@ -1,9 +1,12 @@
 import {
   DEFAULT_SAFETY_CONFIG,
+  decodeGlyphrigInvite,
   generateId,
+  isSafeHttpUrl,
   type ForgeKind,
   type GitHubDeviceCodeResponse,
   type GitHubDeviceTokenPollResult,
+  type GlyphrigGardenManifest,
   type ProfileConfig,
   type SharedGitHubAccount,
   type SyncMode,
@@ -59,22 +62,30 @@ function tokenHintForForge(forge: ForgeKind): string {
 async function ensureOriginPermission(instanceUrl?: string): Promise<void> {
   const clean = instanceUrl?.trim();
   if (!clean) return;
+  if (!isSafeHttpUrl(clean)) {
+    throw new Error('URL must start with http:// or https://.');
+  }
+  const u = new URL(clean);
+  const originPattern = `${u.origin}/*`;
+  const builtInOrigins = [
+    'https://api.github.com/*',
+    'https://github.com/*',
+    'https://gitlab.com/*',
+    'https://codeberg.org/*',
+  ];
+  if (builtInOrigins.includes(originPattern)) return;
+  if (!browser.permissions?.request) return;
+
+  // Call permissions.request directly inside the user gesture (without awaiting
+  // permissions.contains first, which loses the transient user activation in Firefox).
+  let granted = true;
   try {
-    const u = new URL(clean);
-    const originPattern = `${u.origin}/*`;
-    const builtInOrigins = [
-      'https://api.github.com/*',
-      'https://github.com/*',
-      'https://gitlab.com/*',
-      'https://codeberg.org/*',
-    ];
-    if (builtInOrigins.includes(originPattern)) return;
-    const has = await browser.permissions.contains({ origins: [originPattern] });
-    if (!has) {
-      await browser.permissions.request({ origins: [originPattern] });
-    }
+    granted = await browser.permissions.request({ origins: [originPattern] });
   } catch {
-    // Ignore permission prompt failures on browsers where optional permissions are auto-granted
+    return;
+  }
+  if (!granted) {
+    throw new Error(`Host permission for ${u.origin} was denied.`);
   }
 }
 
@@ -134,6 +145,12 @@ const safetyPreviewCheck = document.getElementById('s-preview') as HTMLInputElem
 const effectiveClientIdEl = document.getElementById('effective-client-id')!;
 const oauthOverrideInput = document.getElementById('oauth-override-input') as HTMLInputElement;
 const oauthSaveStatusEl = document.getElementById('oauth-save-status')!;
+const liveBadgeCheck = document.getElementById('opt-live-badge') as HTMLInputElement;
+const liveBadgeStatusEl = document.getElementById('live-badge-status')!;
+
+const joinGardenInput = document.getElementById('input-join-garden') as HTMLInputElement;
+const joinGardenBtn = document.getElementById('btn-join-garden') as HTMLButtonElement;
+const joinGardenStatusEl = document.getElementById('join-garden-status')!;
 
 const conflictsListEl = document.getElementById('conflicts-list')!;
 const historyListEl = document.getElementById('history-list')!;
@@ -157,6 +174,7 @@ let oauthClientId: string | undefined;
 let verifiedUsername = '';
 let pendingPreviewProfileId: string | null = null;
 let activePollTimer: number | undefined;
+let devicePollGeneration = 0;
 
 async function copyTextToClipboard(text: string): Promise<boolean> {
   if (!text) return false;
@@ -193,6 +211,7 @@ function renderVerifiedUsername(): void {
 }
 
 function stopDevicePoll(): void {
+  devicePollGeneration++;
   if (activePollTimer !== undefined) {
     window.clearTimeout(activePollTimer);
     activePollTimer = undefined;
@@ -201,9 +220,14 @@ function stopDevicePoll(): void {
 
 function renderGitHubAccountSelect(): void {
   const forge = forgeSelect.value as ForgeKind;
+  const isSubscribeOnly = syncModeSelect.value === 'subscribe-only';
   if (forge !== 'github') {
     patFieldWrap.hidden = false;
-    tokenInput.required = true;
+    tokenInput.required = !isSubscribeOnly;
+    if (isSubscribeOnly) {
+      tokenHintEl.textContent =
+        'Optional for public repos in Subscribe-only mode — leave blank for anonymous read-only sync.';
+    }
     return;
   }
 
@@ -230,7 +254,9 @@ function renderGitHubAccountSelect(): void {
 
   const patOpt = document.createElement('option');
   patOpt.value = '__pat__';
-  patOpt.textContent = 'Profile-specific Personal Access Token (PAT)';
+  patOpt.textContent = isSubscribeOnly
+    ? 'Anonymous (Public Repo) or Optional PAT'
+    : 'Profile-specific Personal Access Token (PAT)';
   patOpt.selected = !selectedAccountId;
   githubAccountSelect.append(patOpt);
 
@@ -256,12 +282,17 @@ function renderGitHubAccountSelect(): void {
     }
   } else {
     patFieldWrap.hidden = false;
-    tokenInput.required = true;
+    tokenInput.required = !isSubscribeOnly;
     deviceLoginBtn.textContent = 'Sign in with GitHub';
     addGithubAccountBtn.hidden = matchingAccounts.length === 0;
     removeGithubAccountBtn.hidden = true;
-    githubAccountHintEl.textContent =
-      matchingAccounts.length > 0
+    if (isSubscribeOnly) {
+      tokenHintEl.textContent =
+        'Optional for public repos in Subscribe-only mode — leave blank for anonymous read-only sync.';
+    }
+    githubAccountHintEl.textContent = isSubscribeOnly
+      ? 'Subscribe-only works without signing in for public repositories (or select an account for private repos).'
+      : matchingAccounts.length > 0
         ? 'Using a profile-specific PAT, or pick a saved GitHub account above.'
         : 'Sign in with GitHub above or paste a fine-grained PAT below.';
   }
@@ -405,13 +436,33 @@ function buildProfileFromForm(): ProfileConfig {
   if (!selectedFolderId) {
     throw new Error('Please choose a bookmark folder to sync.');
   }
+  const owner = ownerInput.value.trim();
+  const repo = repoInput.value.trim();
+  if (!owner || !repo) {
+    throw new Error('Please enter both Repository Owner and Repository Name.');
+  }
+  const instanceUrl = instanceInput.value.trim();
+  if (instanceUrl && !isSafeHttpUrl(instanceUrl)) {
+    throw new Error('Custom instance URL must start with http:// or https://.');
+  }
+  const siteUrl = siteUrlInput.value.trim();
+  if (siteUrl && !isSafeHttpUrl(siteUrl)) {
+    throw new Error('Published Site URL must start with http:// or https://.');
+  }
+
   const forge = forgeSelect.value as ForgeKind;
+  const syncMode = (syncModeSelect.value as SyncMode) || 'two-way';
   const usingSharedAccount = forge === 'github' && Boolean(selectedAccountId);
   const linkedAccount = usingSharedAccount
     ? (state?.sharedAccounts ?? []).find((a) => a.id === selectedAccountId)
     : undefined;
 
-  if (!usingSharedAccount && !tokenInput.value.trim()) {
+  if (usingSharedAccount && !linkedAccount) {
+    throw new Error(
+      'Selected GitHub account is no longer available. Choose another account or sign in again.',
+    );
+  }
+  if (syncMode !== 'subscribe-only' && !usingSharedAccount && !tokenInput.value.trim()) {
     throw new Error('Please provide a Personal Access Token or sign in with GitHub.');
   }
 
@@ -419,11 +470,11 @@ function buildProfileFromForm(): ProfileConfig {
     id: editingProfileId ?? generateId(),
     name: nameInput.value.trim() || 'Bookmarks',
     enabled: enabledCheck.checked,
-    syncMode: (syncModeSelect.value as SyncMode) || 'two-way',
+    syncMode,
     forge,
-    ...(instanceInput.value.trim() ? { instanceUrl: instanceInput.value.trim() } : {}),
-    owner: ownerInput.value.trim(),
-    repo: repoInput.value.trim(),
+    ...(instanceUrl ? { instanceUrl } : {}),
+    owner,
+    repo,
     branch: branchInput.value.trim() || 'main',
     rootDir: rootDirInput.value.trim() || 'bookmarks',
     ...(usingSharedAccount ? { accountId: selectedAccountId } : {}),
@@ -438,7 +489,7 @@ function buildProfileFromForm(): ProfileConfig {
     ...(verifiedUsername ? { username: verifiedUsername } : {}),
     rootFolderId: selectedFolderId,
     ...(selectedFolderTitle ? { rootFolderTitle: selectedFolderTitle } : {}),
-    ...(siteUrlInput.value.trim() ? { siteUrl: siteUrlInput.value.trim() } : {}),
+    ...(siteUrl ? { siteUrl } : {}),
     autoSync: autoSyncCheck.checked,
     pushDebounceSeconds: Math.max(30, Number(debounceInput.value) || 60),
     pullIntervalMinutes: Math.max(1, Number(pullMinInput.value) || 15),
@@ -484,6 +535,7 @@ function renderState(): void {
 
   effectiveClientIdEl.textContent = state.effectiveGithubOAuthClientId || 'not configured';
   oauthOverrideInput.value = state.githubOAuthClientIdOverride;
+  liveBadgeCheck.checked = Boolean(state.livePageBadgeEnabled);
 
   conflictsListEl.innerHTML = '';
   if (state.conflicts.length === 0) {
@@ -491,12 +543,14 @@ function renderState(): void {
   } else {
     for (const c of state.conflicts) {
       const row = document.createElement('div');
-      row.className = 'log-row is-warning';
+      row.className = `log-row ${c.resolved ? 'is-ok' : 'is-warning'}`;
 
       const head = document.createElement('div');
       head.className = 'row-between';
       const titleEl = document.createElement('strong');
-      titleEl.textContent = `${c.kind} (${c.resolution})`;
+      titleEl.textContent = c.resolved
+        ? `${c.kind} — Resolved (${c.resolvedChoice ?? c.resolution})`
+        : `${c.kind} (${c.resolution})`;
       const timeEl = document.createElement('span');
       timeEl.className = 'small muted';
       timeEl.textContent = new Date(c.timestamp).toLocaleString();
@@ -506,11 +560,67 @@ function renderState(): void {
       targetEl.className = 'small muted';
       targetEl.textContent = c.url || c.folderPath;
 
-      const summaryEl = document.createElement('div');
-      summaryEl.className = 'small';
-      summaryEl.textContent = `Local: ${c.localSummary} | Remote: ${c.remoteSummary}`;
+      const compare = document.createElement('div');
+      compare.className = 'conflict-compare';
+      const localBox = document.createElement('div');
+      localBox.className = 'conflict-side';
+      localBox.innerHTML = `<span class="small muted">Local:</span> <span class="small"></span>`;
+      localBox.lastElementChild!.textContent = c.localSummary;
+      const remoteBox = document.createElement('div');
+      remoteBox.className = 'conflict-side';
+      remoteBox.innerHTML = `<span class="small muted">Remote:</span> <span class="small"></span>`;
+      remoteBox.lastElementChild!.textContent = c.remoteSummary;
+      compare.append(localBox, remoteBox);
 
-      row.append(head, targetEl, summaryEl);
+      row.append(head, targetEl, compare);
+
+      if (!c.resolved) {
+        const actions = document.createElement('div');
+        actions.className = 'row-gap wrap conflict-actions';
+        const errSpan = document.createElement('span');
+        errSpan.className = 'small muted';
+        const supportsMerge =
+          c.kind === 'title-conflict' || c.kind === 'move-conflict';
+        const choices: Array<{
+          label: string;
+          choice: 'local' | 'remote' | 'merged' | 'dismissed';
+        }> = [
+          { label: 'Keep Mine', choice: 'local' },
+          { label: 'Keep Theirs', choice: 'remote' },
+          ...(supportsMerge
+            ? [{ label: 'Merge Both', choice: 'merged' as const }]
+            : []),
+          { label: 'Dismiss', choice: 'dismissed' },
+        ];
+        const rowBtns: HTMLButtonElement[] = [];
+        for (const item of choices) {
+          const btn = document.createElement('button');
+          btn.type = 'button';
+          btn.className = 'btn-secondary btn-sm';
+          btn.textContent = item.label;
+          rowBtns.push(btn);
+          btn.addEventListener('click', async () => {
+            for (const b of rowBtns) b.disabled = true;
+            errSpan.textContent = 'Applying…';
+            try {
+              state = await sendRpc<ExtensionStatePayload>({
+                type: 'RESOLVE_CONFLICT',
+                conflictId: c.id,
+                choice: item.choice,
+              });
+              renderState();
+            } catch (err) {
+              errSpan.textContent =
+                err instanceof Error ? err.message : 'Failed to resolve conflict.';
+              for (const b of rowBtns) b.disabled = false;
+            }
+          });
+          actions.append(btn);
+        }
+        actions.append(errSpan);
+        row.append(actions);
+      }
+
       conflictsListEl.append(row);
     }
   }
@@ -534,6 +644,14 @@ function renderState(): void {
       const msg = document.createElement('div');
       msg.className = 'small';
       msg.textContent = h.message;
+      if (h.pullRequestUrl && isSafeHttpUrl(h.pullRequestUrl)) {
+        const prLink = document.createElement('a');
+        prLink.href = h.pullRequestUrl;
+        prLink.target = '_blank';
+        prLink.rel = 'noopener noreferrer';
+        prLink.textContent = ` (Open PR${h.pullRequestNumber ? ` #${h.pullRequestNumber}` : ''})`;
+        msg.append(prLink);
+      }
       row.append(titleRow, msg);
 
       if (h.skipped && h.skipped.length > 0) {
@@ -654,6 +772,9 @@ forgeSelect.addEventListener('change', () => {
   updateForgeUi();
   clearVerifiedUsername();
 });
+syncModeSelect.addEventListener('change', () => {
+  updateForgeUi();
+});
 instanceInput.addEventListener('input', () => {
   renderGitHubAccountSelect();
   clearVerifiedUsername();
@@ -720,6 +841,7 @@ document.getElementById('btn-export-config')?.addEventListener('click', () => {
     profiles: state.profiles,
     activeProfileId: state.activeProfileId,
     githubOAuthClientIdOverride: state.githubOAuthClientIdOverride,
+    livePageBadgeEnabled: state.livePageBadgeEnabled,
   };
   const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
   const url = URL.createObjectURL(blob);
@@ -727,7 +849,7 @@ document.getElementById('btn-export-config')?.addEventListener('click', () => {
   a.href = url;
   a.download = `glyphrig-config-backup-${new Date().toISOString().slice(0, 10)}.json`;
   a.click();
-  URL.revokeObjectURL(url);
+  window.setTimeout(() => URL.revokeObjectURL(url), 1000);
   backupStatusEl.textContent = `Exported ${state.profiles.length} profile(s) and ${state.sharedAccounts.length} GitHub account(s).`;
 });
 
@@ -741,25 +863,131 @@ importConfigInput.addEventListener('change', async () => {
   if (!file) return;
   try {
     const parsed = JSON.parse(await file.text()) as {
-      sharedAccounts?: SharedGitHubAccount[];
-      profiles?: ProfileConfig[];
+      sharedAccounts?: unknown[];
+      profiles?: unknown[];
       activeProfileId?: string | null;
       githubOAuthClientIdOverride?: string;
+      livePageBadgeEnabled?: boolean;
     };
     if (!Array.isArray(parsed.profiles)) {
       throw new Error('Invalid backup file: missing profiles array.');
     }
+
+    // Refresh current browser folders so we never silently bind a stale rootFolderId
+    // from a different browser/profile to the wrong local bookmark folder.
+    folders = await sendRpc<SelectableFolderNode[]>({ type: 'LIST_FOLDERS' });
+
+    const validForges = new Set<ForgeKind>(['github', 'gitlab', 'forgejo']);
+    const validSyncModes = new Set<SyncMode>([
+      'two-way',
+      'contribute-only',
+      'subscribe-only',
+      'propose-pr',
+    ]);
+
+    let importedAccounts = 0;
     if (Array.isArray(parsed.sharedAccounts)) {
-      for (const account of parsed.sharedAccounts) {
-        await ensureOriginPermission(account.instanceUrl);
-        state = await sendRpc<ExtensionStatePayload>({ type: 'SAVE_SHARED_ACCOUNT', account });
+      for (const rawAccount of parsed.sharedAccounts) {
+        if (!rawAccount || typeof rawAccount !== 'object') continue;
+        const acc = rawAccount as Partial<SharedGitHubAccount>;
+        if (!acc.id || !acc.token) continue;
+        const normalizedAccount: SharedGitHubAccount = {
+          id: String(acc.id),
+          instanceUrl: normalizeGitHubInstance(acc.instanceUrl),
+          ...(acc.username ? { username: String(acc.username) } : {}),
+          ...(acc.displayName ? { displayName: String(acc.displayName) } : {}),
+          token: String(acc.token),
+          authMethod: acc.authMethod === 'pat' ? 'pat' : 'device-flow',
+          ...(acc.refreshToken ? { refreshToken: String(acc.refreshToken) } : {}),
+          ...(acc.tokenExpiresAt ? { tokenExpiresAt: String(acc.tokenExpiresAt) } : {}),
+          ...(acc.refreshTokenExpiresAt
+            ? { refreshTokenExpiresAt: String(acc.refreshTokenExpiresAt) }
+            : {}),
+          ...(acc.oauthClientId ? { oauthClientId: String(acc.oauthClientId) } : {}),
+          updatedAt: acc.updatedAt ? String(acc.updatedAt) : new Date().toISOString(),
+        };
+        await ensureOriginPermission(normalizedAccount.instanceUrl).catch(() => {});
+        state = await sendRpc<ExtensionStatePayload>({
+          type: 'SAVE_SHARED_ACCOUNT',
+          account: normalizedAccount,
+        });
+        importedAccounts++;
       }
     }
-    for (const profile of parsed.profiles) {
-      await ensureOriginPermission(profile.instanceUrl);
-      state = await sendRpc<ExtensionStatePayload>({ type: 'SAVE_PROFILE', profile });
+
+    let importedProfiles = 0;
+    let rebindCount = 0;
+    for (const rawProfile of parsed.profiles) {
+      if (!rawProfile || typeof rawProfile !== 'object') continue;
+      const p = rawProfile as Partial<ProfileConfig>;
+      if (!p.owner || !p.repo || !p.forge || !validForges.has(p.forge)) {
+        continue;
+      }
+
+      const matchedFolder = p.rootFolderId
+        ? folders.find(
+            (f) =>
+              f.selectable &&
+              f.id === p.rootFolderId &&
+              (!p.rootFolderTitle || f.title === p.rootFolderTitle),
+          )
+        : undefined;
+      const needsRebind = !matchedFolder;
+      if (needsRebind) {
+        rebindCount++;
+      }
+
+      const normalizedProfile: ProfileConfig = {
+        id: typeof p.id === 'string' && p.id.trim() ? p.id.trim() : generateId(),
+        name: typeof p.name === 'string' && p.name.trim() ? p.name.trim() : `${p.owner}/${p.repo}`,
+        enabled: needsRebind ? false : Boolean(p.enabled ?? true),
+        syncMode: p.syncMode && validSyncModes.has(p.syncMode) ? p.syncMode : 'two-way',
+        forge: p.forge,
+        ...(p.instanceUrl && isSafeHttpUrl(p.instanceUrl)
+          ? { instanceUrl: p.instanceUrl.trim() }
+          : {}),
+        owner: String(p.owner).trim(),
+        repo: String(p.repo).trim(),
+        branch: typeof p.branch === 'string' && p.branch.trim() ? p.branch.trim() : 'main',
+        rootDir: typeof p.rootDir === 'string' && p.rootDir.trim() ? p.rootDir.trim() : 'bookmarks',
+        ...(p.accountId ? { accountId: String(p.accountId) } : {}),
+        token: typeof p.token === 'string' ? p.token : '',
+        authMethod: p.authMethod === 'device-flow' ? 'device-flow' : 'pat',
+        ...(p.refreshToken ? { refreshToken: String(p.refreshToken) } : {}),
+        ...(p.tokenExpiresAt ? { tokenExpiresAt: String(p.tokenExpiresAt) } : {}),
+        ...(p.refreshTokenExpiresAt
+          ? { refreshTokenExpiresAt: String(p.refreshTokenExpiresAt) }
+          : {}),
+        ...(p.oauthClientId ? { oauthClientId: String(p.oauthClientId) } : {}),
+        ...(p.username ? { username: String(p.username) } : {}),
+        rootFolderId: matchedFolder ? matchedFolder.id : '',
+        ...(matchedFolder
+          ? { rootFolderTitle: matchedFolder.title }
+          : p.rootFolderTitle
+            ? { rootFolderTitle: String(p.rootFolderTitle) }
+            : {}),
+        ...(p.siteUrl && isSafeHttpUrl(p.siteUrl) ? { siteUrl: p.siteUrl.trim() } : {}),
+        autoSync: Boolean(p.autoSync ?? true),
+        pushDebounceSeconds: Math.max(30, Number(p.pushDebounceSeconds) || 60),
+        pullIntervalMinutes: Math.max(1, Number(p.pullIntervalMinutes) || 15),
+        safety: {
+          ...DEFAULT_SAFETY_CONFIG,
+          ...(p.safety && typeof p.safety === 'object' ? p.safety : {}),
+        },
+      };
+
+      await ensureOriginPermission(normalizedProfile.instanceUrl).catch(() => {});
+      state = await sendRpc<ExtensionStatePayload>({
+        type: 'SAVE_PROFILE',
+        profile: normalizedProfile,
+      });
+      importedProfiles++;
     }
-    if (parsed.activeProfileId) {
+
+    if (
+      parsed.activeProfileId &&
+      state?.profiles.some((p) => p.id === parsed.activeProfileId)
+    ) {
       state = await sendRpc<ExtensionStatePayload>({
         type: 'SET_ACTIVE_PROFILE',
         profileId: parsed.activeProfileId,
@@ -771,9 +999,24 @@ importConfigInput.addEventListener('change', async () => {
         clientId: parsed.githubOAuthClientIdOverride,
       });
     }
+    if (typeof parsed.livePageBadgeEnabled === 'boolean') {
+      const canEnable =
+        !parsed.livePageBadgeEnabled ||
+        (await browser.permissions?.contains({ permissions: ['tabs'] }).catch(() => false));
+      if (canEnable) {
+        state = await sendRpc<ExtensionStatePayload>({
+          type: 'SET_LIVE_PAGE_BADGE',
+          enabled: parsed.livePageBadgeEnabled,
+        });
+      }
+    }
+
     loadProfileIntoForm(state?.profiles[0] ?? null);
     renderState();
-    backupStatusEl.textContent = `Imported ${parsed.profiles.length} profile(s).`;
+    backupStatusEl.textContent =
+      rebindCount > 0
+        ? `Imported ${importedProfiles} profile(s) and ${importedAccounts} account(s). ${rebindCount} profile(s) were paused because their browser folder ID was not found — re-select their local folder and re-enable.`
+        : `Imported ${importedProfiles} profile(s) and ${importedAccounts} account(s).`;
   } catch (err) {
     backupStatusEl.textContent = err instanceof Error ? err.message : 'Import failed.';
   }
@@ -822,17 +1065,24 @@ document.getElementById('btn-test-conn')?.addEventListener('click', async () => 
 async function startDeviceFlow(mode: 'update-current' | 'add-new'): Promise<void> {
   deviceFlowMode = mode;
   stopDevicePoll();
+  const myGen = devicePollGeneration;
   deviceLoginBtn.disabled = true;
   addGithubAccountBtn.disabled = true;
   devicePollStatus.textContent = 'Requesting device code…';
   try {
     await ensureOriginPermission(instanceInput.value);
+    if (myGen !== devicePollGeneration) return;
     const instanceHost = instanceInput.value.trim() || undefined;
     const normalizedHost = normalizeGitHubInstance(instanceHost);
     const codeRes = await sendRpc<GitHubDeviceCodeResponse>({
       type: 'START_GITHUB_DEVICE_FLOW',
       instanceUrl: instanceHost,
     });
+    if (myGen !== devicePollGeneration) return;
+
+    if (!isSafeHttpUrl(codeRes.verification_uri)) {
+      throw new Error('GitHub returned an unsafe verification URL.');
+    }
 
     devicePendingBox.hidden = false;
     deviceCodeEl.textContent = codeRes.user_code;
@@ -854,18 +1104,21 @@ async function startDeviceFlow(mode: 'update-current' | 'add-new'): Promise<void
     }
 
     const copied = await copyTextToClipboard(codeRes.user_code);
+    if (myGen !== devicePollGeneration) return;
     deviceCopyFeedbackEl.textContent = copied
       ? '✓ Code copied to clipboard — ready to paste on GitHub.'
       : 'Click Copy Code above before opening GitHub.';
 
     let intervalMs = Math.max(5, codeRes.interval || 5) * 1000;
     const poll = async (): Promise<void> => {
+      if (myGen !== devicePollGeneration) return;
       try {
         const res = await sendRpc<GitHubDeviceTokenPollResult>({
           type: 'POLL_GITHUB_DEVICE_FLOW',
           deviceCode: codeRes.device_code,
           instanceUrl: instanceHost,
         });
+        if (myGen !== devicePollGeneration) return;
         if (res.status === 'authorized') {
           let ghUser: { username?: string; displayName?: string } = {};
           try {
@@ -877,6 +1130,7 @@ async function startDeviceFlow(mode: 'update-current' | 'add-new'): Promise<void
           } catch {
             // Best-effort lookup; proceed with saving account
           }
+          if (myGen !== devicePollGeneration) return;
 
           const existingMatch =
             deviceFlowMode === 'update-current' && selectedAccountId
@@ -972,8 +1226,10 @@ async function startDeviceFlow(mode: 'update-current' | 'add-new'): Promise<void
           setDeviceModalStatus(res.message, 'err');
           return;
         }
+        if (myGen !== devicePollGeneration) return;
         activePollTimer = window.setTimeout(() => void poll(), intervalMs);
       } catch (err) {
+        if (myGen !== devicePollGeneration) return;
         const msg = err instanceof Error ? err.message : 'Polling failed.';
         devicePollStatus.textContent = msg;
         setDeviceModalStatus(msg, 'err');
@@ -981,6 +1237,7 @@ async function startDeviceFlow(mode: 'update-current' | 'add-new'): Promise<void
     };
     activePollTimer = window.setTimeout(() => void poll(), intervalMs);
   } catch (err) {
+    if (myGen !== devicePollGeneration) return;
     const msg = err instanceof Error ? err.message : 'Device Flow failed.';
     devicePendingBox.hidden = false;
     devicePollStatus.textContent = msg;
@@ -1106,16 +1363,50 @@ document.getElementById('btn-preview-sync')?.addEventListener('click', () => {
   });
 });
 
+function showOptionsSyncFeedback(res: SyncResult, initialLabel = false): void {
+  feedbackEl.innerHTML = '';
+  if (res.pullRequestUrl && isSafeHttpUrl(res.pullRequestUrl)) {
+    feedbackEl.append(
+      document.createTextNode(
+        `Proposed PR${res.pullRequestNumber ? ` #${res.pullRequestNumber}` : ''}: `,
+      ),
+    );
+    const prA = document.createElement('a');
+    prA.href = res.pullRequestUrl;
+    prA.target = '_blank';
+    prA.rel = 'noopener noreferrer';
+    prA.textContent = res.pullRequestUrl;
+    feedbackEl.append(prA);
+  } else {
+    feedbackEl.textContent = res.committed
+      ? `${initialLabel ? 'Initial sync committed' : 'Synced cleanly'} (${res.commitSha?.slice(0, 7) ?? ''}).`
+      : initialLabel
+        ? 'Initial sync complete.'
+        : 'Sync complete.';
+  }
+}
+
 document.getElementById('btn-sync-profile')?.addEventListener('click', async () => {
   try {
     const profile = buildProfileFromForm();
     await ensureOriginPermission(profile.instanceUrl);
     state = await sendRpc<ExtensionStatePayload>({ type: 'SAVE_PROFILE', profile });
     editingProfileId = profile.id;
+    renderState();
 
     const hasSnapshot = Boolean(state.snapshots[profile.id]);
-    if (!hasSnapshot && profile.safety.previewFirstSync) {
-      await saveCurrentAndRunPreview();
+    if (
+      !hasSnapshot &&
+      profile.safety.previewFirstSync &&
+      profile.syncMode !== 'subscribe-only'
+    ) {
+      feedbackEl.textContent = 'Computing dry-run preview…';
+      const preview = await sendRpc<DryRunPreviewPayload>({
+        type: 'RUN_DRY_RUN',
+        profileId: profile.id,
+      });
+      feedbackEl.textContent = '';
+      renderPreviewModal(preview);
       return;
     }
 
@@ -1127,9 +1418,7 @@ document.getElementById('btn-sync-profile')?.addEventListener('click', async () 
     });
     state = await sendRpc<ExtensionStatePayload>({ type: 'GET_STATE' });
     renderState();
-    feedbackEl.textContent = res.committed
-      ? `Synced cleanly (${res.commitSha?.slice(0, 7) ?? ''}).`
-      : 'Sync complete.';
+    showOptionsSyncFeedback(res, false);
   } catch (err) {
     feedbackEl.textContent = err instanceof Error ? err.message : 'Sync failed.';
   }
@@ -1147,9 +1436,7 @@ confirmPreviewBtn.addEventListener('click', async () => {
     previewModal.close();
     state = await sendRpc<ExtensionStatePayload>({ type: 'GET_STATE' });
     renderState();
-    feedbackEl.textContent = res.committed
-      ? `Initial sync committed (${res.commitSha?.slice(0, 7) ?? ''}).`
-      : 'Initial sync complete.';
+    showOptionsSyncFeedback(res, true);
   } catch (err) {
     feedbackEl.textContent = err instanceof Error ? err.message : 'Sync failed.';
     previewModal.close();
@@ -1173,6 +1460,110 @@ document.getElementById('btn-save-oauth-id')?.addEventListener('click', async ()
   });
   renderState();
   oauthSaveStatusEl.textContent = 'Saved.';
+});
+
+function applyGardenManifestToForm(manifest: GlyphrigGardenManifest): void {
+  loadProfileIntoForm(null);
+  nameInput.value = manifest.title || `${manifest.owner}/${manifest.repo}`;
+  forgeSelect.value = manifest.forge;
+  ownerInput.value = manifest.owner;
+  repoInput.value = manifest.repo;
+  branchInput.value = manifest.branch || 'main';
+  rootDirInput.value = manifest.rootDir || 'bookmarks';
+  instanceInput.value = manifest.instanceUrl ?? '';
+  siteUrlInput.value = manifest.siteUrl ?? '';
+  syncModeSelect.value = manifest.recommendedSyncMode ?? 'subscribe-only';
+
+  // Always reset auth state from loadProfileIntoForm(null) before matching manifest forge/mode
+  selectedAccountId = '';
+  verifiedUsername = '';
+  authMethod = 'pat';
+
+  if (manifest.forge === 'github' && syncModeSelect.value !== 'subscribe-only') {
+    const targetHost = normalizeGitHubInstance(manifest.instanceUrl);
+    const matching = (state?.sharedAccounts ?? []).find(
+      (a) => normalizeGitHubInstance(a.instanceUrl) === targetHost,
+    );
+    if (matching) {
+      selectedAccountId = matching.id;
+      authMethod = matching.authMethod;
+      verifiedUsername = matching.username ?? '';
+    }
+  }
+
+  renderVerifiedUsername();
+  updateForgeUi();
+  renderState();
+  feedbackEl.textContent = `Loaded "${manifest.title}" (${manifest.owner}/${manifest.repo}). Choose a local bookmark folder and click Save Profile!`;
+}
+
+joinGardenBtn?.addEventListener('click', async () => {
+  const raw = joinGardenInput.value.trim();
+  if (!raw) {
+    joinGardenStatusEl.textContent = 'Paste a glyphrig-invite:... code or a site URL.';
+    return;
+  }
+  joinGardenBtn.disabled = true;
+  joinGardenStatusEl.textContent = 'Loading garden details…';
+  try {
+    let manifest = decodeGlyphrigInvite(raw);
+    if (!manifest && isSafeHttpUrl(raw)) {
+      const parsed = new URL(raw);
+      let targetUrl: string;
+      if (parsed.pathname.toLowerCase().endsWith('.json')) {
+        targetUrl = parsed.toString();
+      } else {
+        parsed.search = '';
+        parsed.hash = '';
+        if (!parsed.pathname.endsWith('/')) {
+          parsed.pathname += '/';
+        }
+        targetUrl = new URL('glyphrig.json', parsed).toString();
+      }
+      await ensureOriginPermission(targetUrl);
+      manifest = await sendRpc<GlyphrigGardenManifest>({
+        type: 'FETCH_GARDEN_MANIFEST',
+        url: targetUrl,
+      });
+    }
+    if (!manifest) {
+      throw new Error('Unrecognized invite code or glyphrig.json URL.');
+    }
+    applyGardenManifestToForm(manifest);
+    joinGardenInput.value = '';
+    joinGardenStatusEl.textContent = `Ready to join ${manifest.owner}/${manifest.repo}!`;
+  } catch (err) {
+    joinGardenStatusEl.textContent =
+      err instanceof Error ? err.message : 'Failed to load garden invite.';
+  } finally {
+    joinGardenBtn.disabled = false;
+  }
+});
+
+liveBadgeCheck?.addEventListener('change', async () => {
+  const desired = liveBadgeCheck.checked;
+  liveBadgeStatusEl.textContent = '';
+  try {
+    if (desired && browser.permissions?.request) {
+      const granted = await browser.permissions.request({ permissions: ['tabs'] });
+      if (!granted) {
+        liveBadgeCheck.checked = false;
+        liveBadgeStatusEl.textContent = 'Tabs permission was not granted; live badge remains off.';
+        return;
+      }
+    }
+    state = await sendRpc<ExtensionStatePayload>({
+      type: 'SET_LIVE_PAGE_BADGE',
+      enabled: desired,
+    });
+    liveBadgeStatusEl.textContent = desired
+      ? 'Enabled — toolbar badge will display teammate save counts locally.'
+      : 'Disabled.';
+  } catch (err) {
+    liveBadgeCheck.checked = !desired;
+    liveBadgeStatusEl.textContent =
+      err instanceof Error ? err.message : 'Failed to update live badge setting.';
+  }
 });
 
 async function init(): Promise<void> {

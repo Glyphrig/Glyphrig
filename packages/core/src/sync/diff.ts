@@ -54,18 +54,78 @@ export function flattenBookmarks(tree: BookmarkTree): BookmarkItemRef[] {
   return out;
 }
 
-function sameBookmarkFields(a: BookmarkEntry, b: BookmarkEntry): boolean {
+function sameContributorNotes(
+  a?: Record<string, string>,
+  b?: Record<string, string>,
+): boolean {
+  const ka = a ? Object.keys(a).sort() : [];
+  const kb = b ? Object.keys(b).sort() : [];
+  if (ka.length !== kb.length) return false;
+  return ka.every((k, i) => k === kb[i] && a![k] === b![k]);
+}
+
+function hasExplicitLocalMetaEdit(base: BookmarkEntry, local: BookmarkEntry): boolean {
+  if (local.note !== undefined && local.note.trim() !== '' && local.note !== base.note) {
+    return true;
+  }
+  if (local.tags.length > 0) {
+    const baseTagSet = new Set(base.tags);
+    if (local.tags.some((t) => !baseTagSet.has(t))) {
+      return true;
+    }
+  }
+  if (local.contributorNotes) {
+    for (const [u, text] of Object.entries(local.contributorNotes)) {
+      if (text.trim() && base.contributorNotes?.[u] !== text) {
+        return true;
+      }
+    }
+  }
+  if (
+    local.archiveUrl !== undefined &&
+    local.archiveUrl.trim() !== '' &&
+    local.archiveUrl !== base.archiveUrl
+  ) {
+    return true;
+  }
+  return false;
+}
+
+function sameBookmarkFields(
+  base: BookmarkEntry,
+  target: BookmarkEntry,
+  browserSource: boolean,
+): boolean {
+  const browserFieldsSame =
+    base.title === target.title &&
+    base.normalizedUrl === target.normalizedUrl &&
+    base.url === target.url &&
+    base.order === target.order;
+
+  if (!browserFieldsSame) {
+    return false;
+  }
+
+  if (browserSource) {
+    // Browser bookmark APIs do not persist Markdown notes/tags/contributorNotes/archiveUrl;
+    // treat absent fields on the browser side as unchanged, while honoring explicit local annotations.
+    return !hasExplicitLocalMetaEdit(base, target);
+  }
+
   return (
-    a.title === b.title &&
-    a.normalizedUrl === b.normalizedUrl &&
-    a.url === b.url &&
-    a.order === b.order &&
-    (a.note ?? '') === (b.note ?? '') &&
-    a.tags.join(',') === b.tags.join(',')
+    (base.note ?? '') === (target.note ?? '') &&
+    base.tags.join(',') === target.tags.join(',') &&
+    sameContributorNotes(base.contributorNotes, target.contributorNotes) &&
+    (base.archiveUrl ?? '') === (target.archiveUrl ?? '')
   );
 }
 
-export function computeTreeDelta(base: BookmarkTree, target: BookmarkTree): TreeDelta {
+export function computeTreeDelta(
+  base: BookmarkTree,
+  target: BookmarkTree,
+  options: { browserSource?: boolean } = {},
+): TreeDelta {
+  const browserSource = options.browserSource ?? false;
   const baseItems = flattenBookmarks(base);
   const targetItems = flattenBookmarks(target);
 
@@ -88,7 +148,7 @@ export function computeTreeDelta(base: BookmarkTree, target: BookmarkTree): Tree
     const t = targetById.get(b.id);
     if (t) {
       matchedTargetIds.add(t.id);
-      if (sameBookmarkFields(b.entry, t.entry)) {
+      if (sameBookmarkFields(b.entry, t.entry, browserSource)) {
         baseStates.set(b.id, {
           kind: 'unchanged',
           targetPath: t.folderPath,

@@ -3,7 +3,7 @@ import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { enrichBookmarks } from '../src/enrich.js';
+import { enrichBookmarks, sanitizeSvgFavicon } from '../src/enrich.js';
 
 const tempDirs: string[] = [];
 const servers: http.Server[] = [];
@@ -117,5 +117,24 @@ describe('URL enrichment and disk caching', () => {
 
     expect(res.stats.skippedUnsafe).toBe(2);
     expect(res.stats.fetchedOk).toBe(0);
+  });
+
+  it('rejects malicious SVG favicons containing scripts, event handlers, or external hrefs', () => {
+    const enc = new TextEncoder();
+    const clean = enc.encode(
+      '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16"><circle cx="8" cy="8" r="6"/></svg>',
+    );
+    expect(sanitizeSvgFavicon(clean)).not.toBeNull();
+
+    const payloads = [
+      '<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script></svg>',
+      '<svg xmlns="http://www.w3.org/2000/svg" onload="alert(1)"><rect width="16" height="16"/></svg>',
+      '<svg xmlns="http://www.w3.org/2000/svg"><foreignObject><body xmlns="http://www.w3.org/1999/xhtml"><script>alert(1)</script></body></foreignObject></svg>',
+      '<svg xmlns="http://www.w3.org/2000/svg"><use href="https://evil.example/x.svg#i"/></svg>',
+      '<?xml-stylesheet type="text/xsl" href="https://evil.example/x.xsl"?><svg xmlns="http://www.w3.org/2000/svg"/>',
+    ];
+    for (const p of payloads) {
+      expect(sanitizeSvgFavicon(enc.encode(p))).toBeNull();
+    }
   });
 });

@@ -10,7 +10,7 @@ permissions:
   id-token: write
 
 jobs:
-  release:
+  build:
     runs-on: ubuntu-latest
     env:
       VITE_GITHUB_OAUTH_CLIENT_ID: ${{ vars.VITE_GITHUB_OAUTH_CLIENT_ID || secrets.VITE_GITHUB_OAUTH_CLIENT_ID }}
@@ -23,7 +23,6 @@ jobs:
         with:
           node-version: "22"
           cache: "pnpm"
-          registry-url: "https://registry.npmjs.org"
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
@@ -39,6 +38,36 @@ jobs:
           pnpm --filter @glyphrig/extension zip
           pnpm --filter @glyphrig/extension zip:firefox
 
+      - name: Upload extension build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: extension-bundles
+          path: |
+            apps/extension/.output/*.zip
+            apps/extension/.output/firefox-mv3/
+          if-no-files-found: error
+
+  publish-npm:
+    needs: [build]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "pnpm"
+          registry-url: "https://registry.npmjs.org"
+
+      - name: Install dependencies & build packages
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm --filter @glyphrig/core build
+          pnpm --filter @glyphrig/site build
+          pnpm --filter @glyphrig/cli build
+
       - name: Publish @glyphrig packages to npm
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
@@ -51,13 +80,29 @@ jobs:
           pnpm --filter @glyphrig/site publish --no-git-checks --access public --provenance
           pnpm --filter @glyphrig/cli publish --no-git-checks --access public --provenance
 
+  publish-github:
+    needs: [build]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download extension artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: extension-bundles
+          path: extension-bundles
+
       - name: Create GitHub Release with extension zips
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            apps/extension/.output/*.zip
+            extension-bundles/*.zip
           generate_release_notes: true
 
+  publish-chrome:
+    needs: [build]
+    runs-on: ubuntu-latest
+    steps:
       - name: Check Chrome Web Store credentials
         id: cws_check
         env:
@@ -69,6 +114,13 @@ jobs:
             echo "enabled=false" >> "$GITHUB_OUTPUT"
             echo "CWS_SERVICE_ACCOUNT_JSON secret is not set; skipping Chrome Web Store upload."
           fi
+
+      - name: Download extension artifacts
+        if: steps.cws_check.outputs.enabled == 'true'
+        uses: actions/download-artifact@v4
+        with:
+          name: extension-bundles
+          path: extension-bundles
 
       - name: Authenticate to Google Cloud (Chrome Web Store API v2)
         if: steps.cws_check.outputs.enabled == 'true'
@@ -88,7 +140,7 @@ jobs:
           ITEM_ID: ennpigbnodfiobgblonmckfeonnagjeg
         run: |
           set -euo pipefail
-          ZIP_FILE=$(ls apps/extension/.output/*-chrome.zip | head -n 1)
+          ZIP_FILE=$(ls extension-bundles/*-chrome.zip | head -n 1)
           echo "Uploading ${ZIP_FILE} to Chrome Web Store..."
 
           UPLOAD_CODE=$(curl -sS -o /tmp/cws-upload.json -w "%{http_code}" \
@@ -105,8 +157,8 @@ jobs:
           fi
 
           UPLOAD_STATE=$(jq -r '.uploadState // "IN_PROGRESS"' /tmp/cws-upload.json)
-          if [ "${UPLOAD_STATE}" = "FAILED" ]; then
-            echo "::error::Chrome Web Store upload state FAILED"
+          if [ "${UPLOAD_STATE}" = "FAILED" ] || [ "${UPLOAD_STATE}" = "NOT_FOUND" ] || [ "${UPLOAD_STATE}" = "UPLOAD_STATE_UNSPECIFIED" ]; then
+            echo "::error::Chrome Web Store upload failed with state: ${UPLOAD_STATE}"
             exit 1
           fi
 
@@ -126,8 +178,8 @@ jobs:
               if [ "${UPLOAD_STATE}" = "SUCCEEDED" ]; then
                 break
               fi
-              if [ "${UPLOAD_STATE}" = "FAILED" ]; then
-                echo "::error::Chrome Web Store async upload processing FAILED"
+              if [ "${UPLOAD_STATE}" = "FAILED" ] || [ "${UPLOAD_STATE}" = "NOT_FOUND" ] || [ "${UPLOAD_STATE}" = "UPLOAD_STATE_UNSPECIFIED" ]; then
+                echo "::error::Chrome Web Store async upload failed with state: ${UPLOAD_STATE}"
                 exit 1
               fi
             done
@@ -149,4 +201,178 @@ jobs:
           if [ "${PUBLISH_CODE}" -ge 400 ]; then
             echo "::error::Chrome Web Store publish failed (HTTP ${PUBLISH_CODE})"
             exit 1
+          fi
+
+  publish-firefox:
+    needs: [build]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check Firefox Add-ons (AMO) credentials
+        id: amo_check
+        env:
+          AMO_JWT_ISSUER: ${{ secrets.AMO_JWT_ISSUER }}
+          AMO_JWT_SECRET: ${{ secrets.AMO_JWT_SECRET }}
+        run: |
+          if [ -n "${AMO_JWT_ISSUER:-}" ] && [ -n "${AMO_JWT_SECRET:-}" ]; then
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            echo "AMO_JWT_ISSUER / AMO_JWT_SECRET not set; skipping Firefox Add-ons (AMO) publish."
+          fi
+
+      - name: Setup Node.js
+        if: steps.amo_check.outputs.enabled == 'true'
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Download extension artifacts
+        if: steps.amo_check.outputs.enabled == 'true'
+        uses: actions/download-artifact@v4
+        with:
+          name: extension-bundles
+          path: extension-bundles
+
+      - name: Submit Firefox Extension to AMO
+        if: steps.amo_check.outputs.enabled == 'true'
+        env:
+          AMO_JWT_ISSUER: ${{ secrets.AMO_JWT_ISSUER }}
+          AMO_JWT_SECRET: ${{ secrets.AMO_JWT_SECRET }}
+        run: |
+          set -euo pipefail
+          SOURCES_ZIP=$(ls extension-bundles/*-sources.zip | head -n 1)
+          npx --yes web-ext@latest sign \
+            --channel=listed \
+            --approval-timeout=0 \
+            --source-dir=extension-bundles/firefox-mv3 \
+            --upload-source-code="${SOURCES_ZIP}" \
+            --artifacts-dir=/tmp/amo-artifacts \
+            --api-key="${AMO_JWT_ISSUER}" \
+            --api-secret="${AMO_JWT_SECRET}"
+
+  publish-edge:
+    needs: [build]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check Microsoft Edge Add-ons credentials
+        id: edge_check
+        env:
+          EDGE_PRODUCT_ID: ${{ secrets.EDGE_PRODUCT_ID }}
+          EDGE_CLIENT_ID: ${{ secrets.EDGE_CLIENT_ID }}
+          EDGE_API_KEY: ${{ secrets.EDGE_API_KEY }}
+        run: |
+          if [ -n "${EDGE_PRODUCT_ID:-}" ] && [ -n "${EDGE_CLIENT_ID:-}" ] && [ -n "${EDGE_API_KEY:-}" ]; then
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            echo "EDGE_PRODUCT_ID / EDGE_CLIENT_ID / EDGE_API_KEY not set; skipping Edge Add-ons publish."
+          fi
+
+      - name: Download extension artifacts
+        if: steps.edge_check.outputs.enabled == 'true'
+        uses: actions/download-artifact@v4
+        with:
+          name: extension-bundles
+          path: extension-bundles
+
+      - name: Upload & Publish Microsoft Edge Extension (Edge API v1.1)
+        if: steps.edge_check.outputs.enabled == 'true'
+        env:
+          EDGE_PRODUCT_ID: ${{ secrets.EDGE_PRODUCT_ID }}
+          EDGE_CLIENT_ID: ${{ secrets.EDGE_CLIENT_ID }}
+          EDGE_API_KEY: ${{ secrets.EDGE_API_KEY }}
+        run: |
+          set -euo pipefail
+          ZIP_FILE=$(ls extension-bundles/*-chrome.zip | head -n 1)
+          echo "Uploading ${ZIP_FILE} to Microsoft Edge Add-ons..."
+
+          UPLOAD_CODE=$(curl -sS -D /tmp/edge-upload-headers.txt -o /tmp/edge-upload.txt -w "%{http_code}" \
+            -X POST \
+            -H "Authorization: ApiKey ${EDGE_API_KEY}" \
+            -H "X-ClientID: ${EDGE_CLIENT_ID}" \
+            -H "Content-Type: application/zip" \
+            --data-binary "@${ZIP_FILE}" \
+            "https://api.addons.microsoftedge.microsoft.com/v1/products/${EDGE_PRODUCT_ID}/submissions/draft/package")
+          if [ "${UPLOAD_CODE}" -ge 400 ]; then
+            cat /tmp/edge-upload.txt
+            echo "::error::Edge Add-ons package upload failed (HTTP ${UPLOAD_CODE})"
+            exit 1
+          fi
+
+          OPERATION_ID=$(grep -i '^location:' /tmp/edge-upload-headers.txt | tail -n 1 | awk '{print $2}' | tr -d '\r\n' || true)
+          if [ -z "${OPERATION_ID}" ]; then
+            echo "::error::Edge Add-ons upload response did not include a Location operation ID"
+            exit 1
+          fi
+
+          OP_STATUS="InProgress"
+          for i in $(seq 1 24); do
+            sleep 5
+            POLL_CODE=$(curl -sS -o /tmp/edge-upload-status.json -w "%{http_code}" \
+              -H "Authorization: ApiKey ${EDGE_API_KEY}" \
+              -H "X-ClientID: ${EDGE_CLIENT_ID}" \
+              "https://api.addons.microsoftedge.microsoft.com/v1/products/${EDGE_PRODUCT_ID}/submissions/draft/package/operations/${OPERATION_ID}")
+            cat /tmp/edge-upload-status.json
+            echo ""
+            if [ "${POLL_CODE}" -ge 400 ]; then
+              echo "::error::Edge Add-ons upload status check failed (HTTP ${POLL_CODE})"
+              exit 1
+            fi
+            OP_STATUS=$(jq -r '.status // "InProgress"' /tmp/edge-upload-status.json)
+            if [ "${OP_STATUS}" = "Succeeded" ]; then
+              break
+            fi
+            if [ "${OP_STATUS}" = "Failed" ]; then
+              echo "::error::Edge Add-ons package validation failed"
+              exit 1
+            fi
+          done
+
+          if [ "${OP_STATUS}" != "Succeeded" ]; then
+            echo "::error::Timed out waiting for Edge Add-ons package upload (last status: ${OP_STATUS})"
+            exit 1
+          fi
+
+          PUBLISH_CODE=$(curl -sS -D /tmp/edge-publish-headers.txt -o /tmp/edge-publish.txt -w "%{http_code}" \
+            -X POST \
+            -H "Authorization: ApiKey ${EDGE_API_KEY}" \
+            -H "X-ClientID: ${EDGE_CLIENT_ID}" \
+            -H "Content-Type: application/json" \
+            -d '{"notes":"Automated release from GitHub Actions"}' \
+            "https://api.addons.microsoftedge.microsoft.com/v1/products/${EDGE_PRODUCT_ID}/submissions")
+          cat /tmp/edge-publish.txt
+          echo ""
+          if [ "${PUBLISH_CODE}" -ge 400 ]; then
+            echo "::error::Edge Add-ons publish failed (HTTP ${PUBLISH_CODE})"
+            exit 1
+          fi
+
+          PUBLISH_OP_ID=$(grep -i '^location:' /tmp/edge-publish-headers.txt | tail -n 1 | awk '{print $2}' | tr -d '\r\n' || true)
+          if [ -n "${PUBLISH_OP_ID}" ]; then
+            PUB_STATUS="InProgress"
+            for i in $(seq 1 24); do
+              sleep 5
+              PUB_POLL_CODE=$(curl -sS -o /tmp/edge-pub-status.json -w "%{http_code}" \
+                -H "Authorization: ApiKey ${EDGE_API_KEY}" \
+                -H "X-ClientID: ${EDGE_CLIENT_ID}" \
+                "https://api.addons.microsoftedge.microsoft.com/v1/products/${EDGE_PRODUCT_ID}/submissions/operations/${PUBLISH_OP_ID}")
+              cat /tmp/edge-pub-status.json
+              echo ""
+              if [ "${PUB_POLL_CODE}" -ge 400 ]; then
+                echo "::error::Edge Add-ons publish status check failed (HTTP ${PUB_POLL_CODE})"
+                exit 1
+              fi
+              PUB_STATUS=$(jq -r '.status // "InProgress"' /tmp/edge-pub-status.json)
+              if [ "${PUB_STATUS}" = "Succeeded" ]; then
+                break
+              fi
+              if [ "${PUB_STATUS}" = "Failed" ]; then
+                echo "::error::Edge Add-ons submission publish failed"
+                exit 1
+              fi
+            done
+            if [ "${PUB_STATUS}" != "Succeeded" ]; then
+              echo "::error::Timed out waiting for Edge Add-ons publish (last status: ${PUB_STATUS})"
+              exit 1
+            fi
           fi

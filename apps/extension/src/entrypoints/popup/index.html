@@ -11,9 +11,9 @@
       <header class="popup-head">
         <div>
           <h1>Glyphrig</h1>
-          <p class="muted" id="popup-subtitle">Git Bookmark Sync</p>
+          <p class="muted small" id="popup-subtitle">Collaborative Git Bookmarks</p>
         </div>
-        <button type="button" class="btn-secondary" id="btn-open-options">Settings</button>
+        <button type="button" class="btn-secondary btn-sm" id="btn-open-options">Settings</button>
       </header>
 
       <section id="empty-state" class="card" hidden>
@@ -26,6 +26,45 @@
           <label for="profile-select">Active Profile</label>
           <select id="profile-select"></select>
         </div>
+
+        <!-- LIVE "SAVED BY YOUR TEAM" CARD -->
+        <section id="team-match-card" class="card team-match-card" hidden>
+          <div class="row-between">
+            <strong id="team-match-heading">Saved in your gardens</strong>
+            <span class="badge is-team" id="team-match-badge">★ 1</span>
+          </div>
+          <div id="team-match-list" class="team-match-list"></div>
+        </section>
+
+        <!-- RICH SAVE & ANNOTATE CURRENT TAB -->
+        <section id="quick-save-card" class="card" hidden>
+          <div class="row-between">
+            <strong id="quick-save-heading">Save &amp; Annotate Tab</strong>
+            <span class="small muted" id="quick-save-shortcut">Alt+Shift+B</span>
+          </div>
+          <form id="quick-save-form" class="quick-save-form">
+            <input id="qs-title" type="text" placeholder="Bookmark title" required />
+            <select id="qs-folder" aria-label="Target subfolder"></select>
+            <input
+              id="qs-note"
+              type="text"
+              placeholder="Why are you saving this? (contributor note)"
+            />
+            <input
+              id="qs-tags"
+              type="text"
+              placeholder="Tags (comma-separated, e.g. rust, tools)"
+              autocomplete="off"
+            />
+            <div id="qs-tag-suggestions" class="tag-chips" hidden></div>
+            <p id="qs-readonly-hint" class="warn-text small" hidden>
+              Read-only subscription profile. Switch to a writable profile to save links.
+            </p>
+            <button type="submit" class="btn-primary" id="btn-quick-save">
+              Save &amp; Sync
+            </button>
+          </form>
+        </section>
 
         <div class="card status-card">
           <div class="row-between">
@@ -40,8 +79,10 @@
         </div>
 
         <div class="actions">
-          <button type="button" class="btn-primary" id="btn-sync-now">Sync Now</button>
-          <button type="button" class="btn-secondary" id="btn-sync-all" hidden>Sync All</button>
+          <div class="actions-row">
+            <button type="button" class="btn-secondary" id="btn-sync-now">Sync Now</button>
+            <button type="button" class="btn-secondary" id="btn-sync-all" hidden>Sync All</button>
+          </div>
           <a class="btn-secondary" id="link-site" target="_blank" rel="noopener noreferrer" hidden>
             Open Public Site
           </a>
