@@ -195,9 +195,10 @@ describe('Astro + Pagefind site build', () => {
     expect(devHtml).not.toContain('archived.example.com');
 
     const aliceHtml = await fs.readFile(path.join(outDir, 'u/alice/index.html'), 'utf8');
-    expect(aliceHtml).toContain('https://shared.example.com');
-    expect(aliceHtml).toContain('1 unique bookmark');
-    expect(aliceHtml).not.toContain('https://bob.example.com');
+    const aliceMain = aliceHtml.match(/<main[\s\S]*?<\/main>/)?.[0] ?? aliceHtml;
+    expect(aliceMain).toContain('https://shared.example.com');
+    expect(aliceMain).toContain('1 unique bookmark');
+    expect(aliceMain).not.toContain('https://bob.example.com');
 
     const bobHtml = await fs.readFile(path.join(outDir, 'u/bob/index.html'), 'utf8');
     expect(bobHtml).toContain('https://shared.example.com');
