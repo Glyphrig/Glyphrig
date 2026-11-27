@@ -9,3 +9,5 @@ apps/githubio/out/
 .env
 .env.local
 *.tsbuildinfo
+.agents
+skills-lock.json
