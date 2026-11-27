@@ -45,6 +45,7 @@ jobs:
           path: |
             apps/extension/.output/*.zip
             apps/extension/.output/firefox-mv3/
+          include-hidden-files: true
           if-no-files-found: error
 
   publish-npm:
